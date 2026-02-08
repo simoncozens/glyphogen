@@ -39,8 +39,8 @@ class NodeCommand(CommandRepresentation):
         first_node = nodes[0]
         pos = cls.coordinate_representation.emit_node_position(first_node)
         commands.append(NodeCommand("M", pos.tolist()))
-        for node in nodes:
-            if node == first_node:
+        for ix, node in enumerate(nodes):
+            if ix == 0:
                 rel_pos = [0.0, 0.0]
             else:
                 rel_pos = cls.coordinate_representation.emit_node_position(

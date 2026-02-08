@@ -21,7 +21,11 @@ def analyze_dataset_stats():
     # Use a simple dataloader; batch size 1 is fine.
     # collate_fn is needed to handle the custom batch structure.
     dataloader = DataLoader(
-        train_dataset, batch_size=8, shuffle=False, collate_fn=collate_fn, num_workers=4
+        train_dataset,
+        batch_size=32,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=4,
     )
     command_histogram = Counter()
 

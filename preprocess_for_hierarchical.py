@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
-import torch
 from pycocotools import mask as mask_util
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
+from fontTools.ttLib import TTFont
 
 from glyphogen.representations.model import MODEL_REPRESENTATION
 from glyphogen.dataset import font_files
@@ -16,8 +16,9 @@ from glyphogen.glyph import Glyph
 from glyphogen.hyperparameters import ALPHABET, GEN_IMAGE_SIZE
 from glyphogen.svgglyph import SVGGlyph
 from glyphogen.nodeglyph import NodeGlyph
+import uharfbuzz as hb
 
-LIMIT = 0
+LIMIT = 500000
 
 
 def get_alignments(node_glyph: "NodeGlyph") -> List[Dict]:
@@ -66,13 +67,14 @@ def process_glyph_data(glyph_list, image_dir, start_img_id=0, start_ann_id=0):
     img_id = start_img_id
     ann_id = start_ann_id
 
-    for font_path, char in tqdm(glyph_list, desc="Processing glyphs"):
+    for font_path, gid, face in tqdm(glyph_list, desc="Processing glyphs"):
         if LIMIT > 0 and len(images_json) >= LIMIT:
             break
         try:
             pth = Path(font_path)
-            glyph = Glyph(pth, ord(char), location={})
-            # print(f"Processing glyph '{char}' from {font_path}")
+            glyph = Glyph(pth, gid, face, location={})
+            glyph_name = glyph.name
+            # print(f"Processing glyph '{gid}' from {font_path}")
 
             # Generate vector data first to ensure it's valid
             node_glyph = glyph.vectorize().to_node_glyph()
@@ -99,7 +101,7 @@ def process_glyph_data(glyph_list, image_dir, start_img_id=0, start_ann_id=0):
                 print("  Skipping glyph due to segmentation/vectorization mismatch.")
                 continue
 
-            img_filename = f"{pth.stem}-{char}.png"
+            img_filename = f"{pth.stem}-{glyph_name}.png"
             img_path = image_dir / img_filename
             if not img_path.parent.exists():
                 img_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,7 +109,7 @@ def process_glyph_data(glyph_list, image_dir, start_img_id=0, start_ann_id=0):
                 # Generate and save raster image
                 raster_img = glyph.rasterize(GEN_IMAGE_SIZE[0])
                 if np.sum(raster_img) < 0.01:  # Skip blank images
-                    print(f"Skipping blank image for {char} in {font_path}")
+                    print(f"Skipping blank image for {glyph_name} in {font_path}")
                     continue
 
                 from PIL import Image
@@ -124,7 +126,7 @@ def process_glyph_data(glyph_list, image_dir, start_img_id=0, start_ann_id=0):
                     "height": GEN_IMAGE_SIZE[0],
                     "file_name": img_filename,
                     "font_path": str(font_path),
-                    "character": char,
+                    "character": glyph_name,
                 }
             )
 
@@ -160,7 +162,7 @@ def process_glyph_data(glyph_list, image_dir, start_img_id=0, start_ann_id=0):
             img_id += 1
 
         except Exception as e:
-            print(f"Could not process {char} from {font_path}: {e}")
+            print(f"Could not process from {font_path}: {e}")
 
     return images_json, annotations_json
 
@@ -175,8 +177,11 @@ def main():
 
     all_glyphs = []
     for font in font_files:
-        for char in ALPHABET:
-            all_glyphs.append((font, char))
+        blob = hb.Blob.from_file_path(font)  # type: ignore
+        face = hb.Face(blob)  # type: ignore
+        gids = face.glyph_count
+        for gid in range(1, gids + 1):
+            all_glyphs.append((font, gid, face))
 
     random.seed(42)
     random.shuffle(all_glyphs)

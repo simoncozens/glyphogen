@@ -82,7 +82,7 @@ cache_dir = Path("imgcache")
 
 
 class Glyph:
-    """A glyph defined by a font file, unicode ID, and location in design space.
+    """A glyph defined by a font file, glyph ID, and location in design space.
 
     We don't store any vector representation here; that is generated on demand.
     We are simply representing the concept of a source glyph, with the ability
@@ -93,22 +93,28 @@ class Glyph:
     """
 
     font_file: Path
-    unicode_id: int
+    glyph_id: int
     location: Dict[str, float]
+    name: str
 
     def __repr__(self) -> str:
-        return f"Glyph(font_file={self.font_file}, unicode_id={self.unicode_id}, location={self.location})"
+        return f"Glyph(font_file={self.font_file}, glyph_id={self.name}, location={self.location})"
 
-    def __init__(self, font_file: Path, unicode_id: int, location: Dict[str, float]):
+    def __init__(
+        self, font_file: Path, glyph_id: int, face, location: Dict[str, float]
+    ):
         self.font_file = font_file
-        self.unicode_id = unicode_id
+        self.glyph_id = glyph_id
         self.location = location
+        self.face = face  # type: ignore
+        font = hb.Font(face)  # type: ignore
+        self.name = font.get_glyph_name(self.glyph_id)  # type: ignore
 
     def rasterize(self, size: int = RASTER_IMG_SIZE) -> npt.NDArray[np.float64]:
         font_base = str(self.font_file).replace(BASE_DIR + "/", "").replace("/", "-")
         key = "-".join(
             [
-                str(self.unicode_id),
+                str(self.glyph_id),
                 ",".join(
                     {f"{k}:{self.location[k]}" for k in sorted(self.location.keys())}
                 ),
@@ -157,42 +163,33 @@ class Glyph:
         return np.expand_dims(numpy_image, axis=-1).astype(np.float64)
 
     def vectorize(self, remove_overlaps: bool = True) -> SVGGlyph:
-        scale = 1000 / TTFont(self.font_file)["head"].unitsPerEm  # type: ignore
-        blob = hb.Blob.from_file_path(self.font_file)  # type: ignore
-        face = hb.Face(blob)  # type: ignore
-        font = hb.Font(face)  # type: ignore
+        scale = 1000 / self.face.upem  # type: ignore
+        font = hb.Font(self.face)  # type: ignore
         svgpen = AbsoluteSVGPathPen({}, ntos=lambda f: str(int(f * scale)))
         pen = AddExtremaPen(svgpen)
         pen = Qu2CuPen(pen, max_err=5, all_cubic=True)
         if self.location:
             font.set_variations(self.location)
-        glyph = font.get_nominal_glyph(self.unicode_id)
         path = []
-        if glyph is None:
+        if self.glyph_id is None:
             return SVGGlyph([])
 
         if remove_overlaps:
             skpath = pathops.Path()
             pathPen = skpath.getPen()
-            font.draw_glyph_with_pen(glyph, pathPen)
-            skpath = _simplify(skpath, chr(self.unicode_id))
+            font.draw_glyph_with_pen(self.glyph_id, pathPen)
+            skpath = _simplify(skpath, chr(self.glyph_id))
             skpath.draw(pen)
         else:
-            font.draw_glyph_with_pen(glyph, pen)
+            font.draw_glyph_with_pen(self.glyph_id, pen)
 
         for command in svgpen._commands:
             cmd = command[0] if command[0] != " " else "L"
             coords = [int(p) for p in command[1:].split()]
-            if "XAUG" in self.location:
-                for i in range(0, len(coords), 2):
-                    coords[i] += int(self.location["XAUG"])
-            if "YAUG" in self.location:
-                for i in range(1, len(coords), 2):
-                    coords[i] += int(self.location["YAUG"])
 
             image_space_coords = []
             for x, y in zip(coords[0::2], coords[1::2]):
                 ix, iy = to_image_space((x, y))
                 image_space_coords.extend([ix, iy])
             path.append(SVGCommand(cmd, image_space_coords))
-        return SVGGlyph(path, "%s, %s" % (self.font_file, chr(self.unicode_id)))
+        return SVGGlyph(path, "%s, %s" % (self.font_file, chr(self.glyph_id)))

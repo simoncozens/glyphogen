@@ -287,12 +287,13 @@ def masked_relative_std_coordinate_loss(
     device, gt_command_for_loss, gt_coords_std, pred_coords_std
 ):
     """
-    Calculates MSE loss on standardized, relative coordinates.
+    Calculates MAE loss on standardized, relative coordinates.
     """
     coord_mask = coordinate_width_mask(gt_command_for_loss, gt_coords_std)
-    elementwise_coord_loss = F.mse_loss(
+    elementwise_coord_loss = F.l1_loss(
         pred_coords_std,
         gt_coords_std,
+        #delta = 0.1,
         reduction="none",
     )
     masked_coord_loss = elementwise_coord_loss * coord_mask
@@ -308,13 +309,14 @@ def masked_absolute_coordinate_loss(
     device, gt_command_for_loss, abs_gt_coords, abs_pred_coords
 ):
     """
-    Calculates L1 loss on absolute, bbox-normalized coordinates.
+    Calculates Huber loss on absolute, bbox-normalized coordinates.
     """
     coord_mask = coordinate_width_mask(gt_command_for_loss, abs_gt_coords)
-    elementwise_coord_loss = F.l1_loss(
+    elementwise_coord_loss = F.huber_loss(
         abs_pred_coords,
         abs_gt_coords,
         reduction="none",
+        delta=HUBER_DELTA,
     )
     masked_coord_loss = elementwise_coord_loss * coord_mask
     num_coords_in_loss = coord_mask.sum()

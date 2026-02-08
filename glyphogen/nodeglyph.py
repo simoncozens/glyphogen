@@ -23,6 +23,7 @@ class Node:
     out_handle: Optional[npt.NDArray[np.float32]]
     _contour: "NodeContour"
     ALIGNMENT_EPSILON = 0.1
+    _index: Optional[int] = None
 
     def __init__(self, coordinates, contour, in_handle=None, out_handle=None):
         self.coordinates = np.array(coordinates)
@@ -32,7 +33,9 @@ class Node:
 
     @property
     def index(self) -> int:
-        return self._contour.nodes.index(self)
+        if self._index is None:
+            self._contour.index_your_nodes()
+        return self._index
 
     @property
     def next(self) -> "Node":
@@ -145,6 +148,10 @@ class NodeContour:
         # Adopt all the nodes in this list
         for node in self.nodes:
             node._contour = self
+
+    def index_your_nodes(self):
+        for i, node in enumerate(self.nodes):
+            node._index = i
 
     def normalize(self) -> None:
         if not self.nodes:

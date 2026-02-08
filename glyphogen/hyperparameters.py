@@ -2,21 +2,21 @@
 LATENT_DIM = 32
 D_MODEL = 1024
 PROJ_SIZE = D_MODEL // 4
-RATE = 0.01  # Specifically, the dropout rate
-EPOCHS = 2000
-BATCH_SIZE = 64
+RATE = 0  # Specifically, the dropout rate
+EPOCHS = 300
+BATCH_SIZE = 32
 RASTER_LOSS_WEIGHT = 15000.0
 
 # Vectorization sub-model weights
 VECTOR_LOSS_WEIGHT_COMMAND = 1.0  # Keep this at 1, normalize others against it
 # VECTOR_RASTERIZATION_LOSS_WEIGHT = 0.01
-VECTOR_LOSS_WEIGHT_COORD = 1.0
+VECTOR_LOSS_WEIGHT_COORD = 5.0
 VECTOR_LOSS_WEIGHT_COORD_ABSOLUTE = (
     0.5  # Ratio of absolute coord loss to relative coord loss
 )
 
-SIGNED_AREA_WEIGHT = 0.001
-ALIGNMENT_LOSS_WEIGHT = 0.001
+SIGNED_AREA_WEIGHT = 0.05
+ALIGNMENT_LOSS_WEIGHT = 0.05
 
 EOS_SOFTMAX_TEMPERATURE = 0.1
 HUBER_DELTA = (
@@ -24,9 +24,9 @@ HUBER_DELTA = (
 )  # Loss computations are in normalized -1 to 1 space across a 512 pixel image.
 LOSS_IMAGE_SIZE = 256  # Size to rasterize images to for raster loss calculation
 
-LEARNING_RATE = 1e-6
-FINAL_LEARNING_RATE = 1e-8
-WARMUP_STEPS = 6000
+LEARNING_RATE = 1e-3
+FINAL_LEARNING_RATE = 1e-5
+WARMUP_STEPS = 400
 
 GEN_IMAGE_SIZE = (512, 512)
 RASTER_IMG_SIZE = GEN_IMAGE_SIZE[0]
@@ -36,11 +36,11 @@ LIMIT = 0  # Limit the number of fonts to process for testing
 
 # Scheduled Sampling
 # Start decaying the teacher forcing ratio at this epoch
-SCHEDULED_SAMPLING_START_EPOCH = 5
+SCHEDULED_SAMPLING_START_EPOCH = 5 
 # Fully decayed by this epoch
-SCHEDULED_SAMPLING_END_EPOCH = 100
+SCHEDULED_SAMPLING_END_EPOCH = EPOCHS
 # The minimum teacher forcing ratio (1.0 = 100% teacher forcing)
-SCHEDULED_SAMPLING_MIN_RATIO = 0.75
+SCHEDULED_SAMPLING_MIN_RATIO = 0.9
 
 
 MAX_SEQUENCE_LENGTH = MAX_COMMANDS + 2  # +2 for SOS and EOS tokens

@@ -78,8 +78,6 @@ class LSTMDecoder(nn.Module):
         command_logits = self.output_command(x)
         coord_head_input = torch.cat([x, command_logits], dim=-1)
         coord_output = self.output_coords(coord_head_input)
-        # Remove this once standardization works
-        # coord_output = self.tanh(coord_output)
 
         return command_logits, coord_output, hidden_state
 
@@ -116,8 +114,23 @@ class LSTMDecoder(nn.Module):
                         predicted_command_idx,
                         num_classes=MODEL_REPRESENTATION.command_width,
                     ).float()
+
+                    # Calculate Heading for next step
+                    next_means, next_stds = MODEL_REPRESENTATION.get_stats_for_sequence(
+                        predicted_command_idx
+                    )
+                    coord_output_norm = MODEL_REPRESENTATION.de_standardize(
+                        coord_output_std, next_means, next_stds
+                    )
+                    temp_token_norm = torch.cat(
+                        [next_command_onehot, coord_output_norm], dim=-1
+                    )
+                    deltas = MODEL_REPRESENTATION.compute_deltas(temp_token_norm)
+                    deltas_norm = torch.norm(deltas, p=2, dim=-1, keepdim=True)
+                    heading = deltas / (deltas_norm + 1e-8)
+
                     current_input_std = torch.cat(
-                        [next_command_onehot, coord_output_std], dim=-1
+                        [next_command_onehot, coord_output_std, heading], dim=-1
                     )
 
         command_output = torch.cat(all_command_logits, dim=1)

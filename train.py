@@ -11,11 +11,11 @@ import random
 import sys
 from pathlib import Path
 
-from glyphogen.scheduler import get_cosine_annealing_with_warmup
+from glyphogen.scheduler import get_cosine_annealing_with_warmup, WarmupLR
 
 # Add the torchvision references to the path
 sys.path.append("vision/references/detection/")
-torch.multiprocessing.set_sharing_strategy('file_system')
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 from glyphogen.callbacks import (
     log_vectorizer_outputs,
@@ -43,15 +43,22 @@ from glyphogen.model import VectorizationGenerator, step
 do_validation = True
 
 
-def dump_accumulators(accumulators, writer, epoch, batch_idx):
+def dump_accumulators(accumulators, writer, epoch, batch_idx, step=None):
     for key, value in accumulators.items():
-        avg_value = value / (batch_idx + 1)
+        if step is not None:
+            avg_value = value
+            prefix = "Step"
+            epoch = step
+        else:
+            avg_value = value / (batch_idx + 1)
+            prefix = ""
         if key.endswith("_loss"):
             scalar_key = key.replace("_loss", "")
-            writer.add_scalar(f"Loss/{scalar_key}", avg_value, epoch)
+            writer.add_scalar(f"{prefix}Loss/{scalar_key}", avg_value, epoch)
         else:
             scalar_key = key.replace("_metric", "")
-            writer.add_scalar(f"Metric/{scalar_key}", avg_value, epoch)
+            writer.add_scalar(f"{prefix}Metric/{scalar_key}", avg_value, epoch)
+    writer.flush()
 
 
 def write_gradient_norms(model, losses, writer, step):
@@ -119,7 +126,7 @@ def main(
         drop_last=True,
         shuffle=True,
         worker_init_fn=seed_worker,
-        num_workers=16,
+        num_workers=0,
     )
     test_loader = DataLoader(
         test_dataset,
@@ -127,7 +134,7 @@ def main(
         collate_fn=collate_fn,
         drop_last=True,
         worker_init_fn=seed_worker,
-        num_workers=16,
+        num_workers=0,
     )
 
     if canary is not None:
@@ -155,26 +162,27 @@ def main(
     ) - 1  # Last batch is dropped, simulate a 1/3 size validation set
 
     # Optimizer and Loss
-    # optimizer = torch.optim.AdamW(
-    #     model.parameters(), lr=LEARNING_RATE, weight_decay=0.005
-    # )
-    optimizer = torch.optim.Adam(model.parameters(), lr=torch.tensor(LEARNING_RATE))
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=torch.tensor(LEARNING_RATE), 
+        weight_decay=0.005
+    )
 
     @torch.compile(fullgraph=False)
     def compiled_opt_step():
         optimizer.step()
 
     # Work out gamma from number of steps and start/end learning rate
-    # final_learning_rate = LEARNING_RATE * (gamma ** epochs)
-    gamma = (FINAL_LEARNING_RATE / LEARNING_RATE) ** (1 / epochs)
+    # final_learning_rate = LEARNING_RATE * (gamma ** steps)
+    gamma = (FINAL_LEARNING_RATE / LEARNING_RATE) ** (1 / (train_batch_count * epochs))
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+    scheduler = WarmupLR(scheduler, 0, num_warmup = WARMUP_STEPS)
 
     # Note we are stepping the scheduler each batch, not each epoch
+
     # alpha_f = FINAL_LEARNING_RATE / LEARNING_RATE
     # scheduler = get_cosine_annealing_with_warmup(
-    #     optimizer, WARMUP_STEPS, train_batch_count, alpha_f
+    #    optimizer, WARMUP_STEPS, train_batch_count * epochs, alpha_f
     # )
-
     # Training Loop
     train_writer = SummaryWriter(
         f"logs/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}/train"
@@ -239,6 +247,7 @@ def main(
             compiled_opt_step()
             for loss_key, loss_value in losses.items():
                 loss_accumulators[loss_key] += loss_value.item()
+            dump_accumulators(losses, train_writer, epoch, i, step=global_step)
 
             kbar.update(
                 i,
@@ -249,10 +258,10 @@ def main(
             )
 
             global_step += 1
-        scheduler.step()  # Step the scheduler each epoch
-        train_writer.add_scalar(
-            "Learning Rate", scheduler.get_last_lr()[0], global_step
-        )
+            scheduler.step()  # Step the scheduler each batch
+            train_writer.add_scalar(
+                "Learning Rate", scheduler.get_last_lr()[0], global_step
+            )
 
         dump_accumulators(loss_accumulators, train_writer, epoch, i)
         train_writer.flush()

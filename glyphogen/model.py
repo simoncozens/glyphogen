@@ -268,6 +268,7 @@ class VectorizationGenerator(nn.Module):
         pred_commands_batch, pred_coords_std_batch = self.decoder(
             decoder_input_std,  # Pass standardized input
             context=z_batch,
+            teacher_forcing_ratio=teacher_forcing_ratio
         )
 
         # Unpad and handle results
