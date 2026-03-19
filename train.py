@@ -5,7 +5,7 @@ import os
 
 import pkbar
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 import random
 import sys
@@ -39,6 +39,7 @@ from glyphogen.hyperparameters import (
     WARMUP_STEPS,
 )
 from glyphogen.model import VectorizationGenerator, step
+from glyphogen.representations.model import MODEL_REPRESENTATION
 
 do_validation = True
 
@@ -119,15 +120,65 @@ def main(
         worker_seed = torch.initial_seed() % 2**32
         random.seed(worker_seed)
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        collate_fn=collate_fn,
-        drop_last=True,
-        shuffle=True,
-        worker_init_fn=seed_worker,
-        num_workers=0,
-    )
+    # --- Weighted Random Sampler for class imbalance ---
+    print("Calculating weights for weighted random sampler...")
+    try:
+        command_counts = torch.load("data/command_stats.pt")
+        # Weights are inversely proportional to frequency.
+        # The weight for a sample (image) is the weight of the rarest command it contains.
+        command_weights = {
+            MODEL_REPRESENTATION.encode_command(cmd): 1.0 / count
+            for cmd, count in command_counts.items()
+        }
+
+        sample_weights = []
+        from tqdm import tqdm
+
+        for i in tqdm(range(len(train_dataset)), desc="Calculating sampler weights"):
+            _, targets = train_dataset[i]
+            if not targets or not targets["gt_contours"]:
+                sample_weights.append(0.0)
+                continue
+
+            max_weight_for_sample = 0.0
+            for contour in targets["gt_contours"]:
+                sequence = contour["sequence"]
+                commands, _ = MODEL_REPRESENTATION.split_tensor(sequence)
+                command_indices = torch.argmax(commands, dim=-1)
+                for cmd_idx in command_indices:
+                    weight = command_weights.get(cmd_idx.item(), 0.0)
+                    if weight > max_weight_for_sample:
+                        max_weight_for_sample = weight
+
+            sample_weights.append(max_weight_for_sample)
+
+        sampler = WeightedRandomSampler(
+            weights=torch.DoubleTensor(sample_weights),
+            num_samples=len(train_dataset),
+            replacement=True,
+        )
+        print("Using WeightedRandomSampler.")
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=BATCH_SIZE,
+            collate_fn=collate_fn,
+            sampler=sampler,
+            drop_last=True,
+            worker_init_fn=seed_worker,
+            num_workers=0,
+        )
+    except FileNotFoundError:
+        print("data/command_stats.pt not found. Using default shuffled DataLoader.")
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=BATCH_SIZE,
+            collate_fn=collate_fn,
+            drop_last=True,
+            shuffle=True,
+            worker_init_fn=seed_worker,
+            num_workers=0,
+        )
+
     test_loader = DataLoader(
         test_dataset,
         batch_size=BATCH_SIZE,
