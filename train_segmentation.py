@@ -8,10 +8,10 @@ from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 # This allows us to import engine, utils, etc.
 sys.path.append("vision/references/detection/")
 
-import engine
-import utils
+import engine  # torchvision.vision.references.detection.engine
+import utils  # etc.
 import torchvision.transforms.v2 as T
-from glyphogen.dataset import GlyphCocoDataset
+from glyphogen.dataset import GlyphSqliteDataset, get_hierarchical_data
 
 
 def get_model_instance_segmentation(num_classes):
@@ -30,12 +30,53 @@ def get_model_instance_segmentation(num_classes):
 
 def get_transform(train):
     transforms = []
-    if train:
-        # A simple training transform
-        transforms.append(T.RandomHorizontalFlip(0.5))
-    # converts the image, a PIL image, into a PyTorch Tensor
-    transforms.append(T.ToTensor())
+    # if train:
+    # A simple training transform
+    # transforms.append(T.RandomHorizontalFlip(0.5))
+
+    # Use newer v2 transforms consistent with dataset.py
+    transforms.append(T.ToImage())
+    transforms.append(T.ToDtype(torch.float32, scale=True))
     return T.Compose(transforms)
+
+
+def collate_fn(batch):
+    """
+    Custom collate_fn to adapt GlyphSqliteDataset/GlyphCocoDataset structure
+    to what MaskRCNN expects.
+    """
+    batch = [b for b in batch if b is not None]
+    if not batch:
+        return tuple(), tuple()
+
+    images = []
+    targets = []
+    for img, target in batch:
+        images.append(img)
+
+        gt_contours = target["gt_contours"]
+
+        if len(gt_contours) == 0:
+            # MaskRCNN expects tensors even if empty
+            boxes = torch.empty((0, 4), dtype=torch.float32)
+            labels = torch.empty((0,), dtype=torch.int64)
+            # Get H, W from image
+            _, h, w = img.shape
+            masks = torch.empty((0, h, w), dtype=torch.uint8)
+        else:
+            boxes = torch.stack([t["box"] for t in gt_contours])
+            labels = torch.stack([t["label"] for t in gt_contours])
+            masks = torch.stack([t["mask"] for t in gt_contours])
+
+        new_target = {
+            "boxes": boxes,
+            "labels": labels,
+            "masks": masks,
+            "image_id": torch.tensor([target["image_id"]]),
+        }
+        targets.append(new_target)
+
+    return tuple(images), tuple(targets)
 
 
 def main():
@@ -44,28 +85,22 @@ def main():
 
     num_classes = 3  # 0: background, 1: outer, 2: hole
 
-    # Define paths
-    from pathlib import Path
-    DATA_DIR = Path("data")
-    TRAIN_IMG_DIR = DATA_DIR / "images_hierarchical" / "train"
-    TEST_IMG_DIR = DATA_DIR / "images_hierarchical" / "test"
-    TRAIN_JSON = DATA_DIR / "train_hierarchical.json"
-    TEST_JSON = DATA_DIR / "test_hierarchical.json"
-
-    # Use the new dataset
-    dataset = GlyphCocoDataset(root=TRAIN_IMG_DIR, annFile=TRAIN_JSON, transforms=get_transform(train=True))
-    dataset_test = GlyphCocoDataset(root=TEST_IMG_DIR, annFile=TEST_JSON, transforms=get_transform(train=False))
+    # Pass our transform to get_hierarchical_data
+    dataset, dataset_test = get_hierarchical_data(
+        train_transform=get_transform(train=True),
+        test_transform=get_transform(train=False),
+    )
 
     # DataLoaders
     data_loader = torch.utils.data.DataLoader(
-        dataset, batch_size=8, shuffle=True, num_workers=4, collate_fn=utils.collate_fn
+        dataset, batch_size=8, shuffle=True, num_workers=4, collate_fn=collate_fn
     )
     data_loader_test = torch.utils.data.DataLoader(
         dataset_test,
         batch_size=1,
         shuffle=False,
         num_workers=4,
-        collate_fn=utils.collate_fn,
+        collate_fn=collate_fn,
     )
 
     model = get_model_instance_segmentation(num_classes)
@@ -79,7 +114,7 @@ def main():
 
     for epoch in range(num_epochs):
         engine.train_one_epoch(
-            model, optimizer, data_loader, device, epoch, print_freq=100
+            model, optimizer, data_loader, device, epoch, print_freq=10
         )
         lr_scheduler.step()
         engine.evaluate(model, data_loader_test, device=device)

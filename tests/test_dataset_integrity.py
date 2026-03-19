@@ -1,7 +1,9 @@
-import torch
-from glyphogen.dataset import GlyphCocoDataset
-from glyphogen.representations.nodecommand import NodeCommand
 import os
+import pytest
+import torch
+
+from glyphogen.dataset import get_hierarchical_data
+from glyphogen.representations.model import MODEL_REPRESENTATION
 
 # This test is designed to be run from the root of the project.
 # It checks the integrity of the dataset by inspecting the command sequences.
@@ -13,18 +15,20 @@ def test_inspect_dataset_sequences():
     first few items to verify they are not malformed (e.g., all EOS).
     """
     DATA_DIR = "data"
-    TRAIN_IMG_DIR = os.path.join(DATA_DIR, "images_hierarchical", "train")
+    TRAIN_DB = os.path.join(DATA_DIR, "train_hierarchical.sqlite")
     TRAIN_JSON = os.path.join(DATA_DIR, "train_hierarchical.json")
 
-    print(f"Loading dataset from: {TRAIN_JSON}")
+    print(
+        f"Loading dataset from: {TRAIN_DB if os.path.exists(TRAIN_DB) else TRAIN_JSON}"
+    )
 
-    # Check if the annotation file exists
-    if not os.path.exists(TRAIN_JSON):
-        pytest.fail(f"Annotation file not found: {TRAIN_JSON}")
+    if not os.path.exists(TRAIN_DB) and not os.path.exists(TRAIN_JSON):
+        pytest.fail("Annotation file not found. Run preprocess_for_hierarchical.py.")
 
-    dataset = GlyphCocoDataset(root=TRAIN_IMG_DIR, annFile=TRAIN_JSON)
+    train_dataset, _ = get_hierarchical_data()
+    dataset = train_dataset
 
-    command_names = list(NodeCommand.grammar.keys())
+    command_names = list(MODEL_REPRESENTATION.grammar.keys())
     command_width = len(command_names)
     num_items_to_check = 5
 

@@ -557,13 +557,16 @@ def step(
                     used_teacher_forcing=outputs.used_teacher_forcing,
                 )
 
-                dump_debug_sequences(
-                    writer,
-                    global_step,
-                    i,
-                    gt_targets[i]["gt_contours"],
-                    debug_outputs,
-                    loss_values,
-                )
+                try:
+                    dump_debug_sequences(
+                        writer,
+                        global_step,
+                        i,
+                        gt_targets[i]["gt_contours"],
+                        debug_outputs,
+                        loss_values,
+                    )
+                except Exception as e:
+                    print("Error dumping sequences", e)
 
     return loss_values, [outputs]  # Return list with one item for consistency

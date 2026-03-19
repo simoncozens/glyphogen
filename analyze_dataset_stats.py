@@ -1,7 +1,8 @@
+from collections import Counter
+from pathlib import Path
+
 import torch
 from torch.utils.data import DataLoader
-from collections import Counter, defaultdict
-import numpy as np
 from tqdm import tqdm
 
 from glyphogen.dataset import get_hierarchical_data, collate_fn
@@ -16,6 +17,15 @@ def analyze_dataset_stats():
     Analyzes the training dataset to compute mean and standard deviation for
     different types of coordinates.
     """
+    stats_path = Path("data/coord_stats.pt")
+    if stats_path.exists():
+        print(f"Found precomputed stats at {stats_path}.")
+        final_stats = torch.load(stats_path)
+        print("\n--- Coordinate Statistics (Mask Space) ---")
+        for name, values in final_stats.items():
+            print(f"{name}: \tMean: {values['mean']:.4f}, \tStd: {values['std']:.4f}")
+        return
+
     print("Loading dataset...")
     train_dataset, _ = get_hierarchical_data()
     # Use a simple dataloader; batch size 1 is fine.

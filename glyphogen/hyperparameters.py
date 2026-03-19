@@ -3,7 +3,7 @@ LATENT_DIM = 32
 D_MODEL = 1024
 PROJ_SIZE = D_MODEL // 4
 RATE = 0  # Specifically, the dropout rate
-EPOCHS = 300
+EPOCHS = 50
 BATCH_SIZE = 32
 RASTER_LOSS_WEIGHT = 15000.0
 
@@ -36,11 +36,11 @@ LIMIT = 0  # Limit the number of fonts to process for testing
 
 # Scheduled Sampling
 # Start decaying the teacher forcing ratio at this epoch
-SCHEDULED_SAMPLING_START_EPOCH = 5 
+SCHEDULED_SAMPLING_START_EPOCH =  1
 # Fully decayed by this epoch
 SCHEDULED_SAMPLING_END_EPOCH = EPOCHS
 # The minimum teacher forcing ratio (1.0 = 100% teacher forcing)
-SCHEDULED_SAMPLING_MIN_RATIO = 0.9
+SCHEDULED_SAMPLING_MIN_RATIO = 0.5
 
 
 MAX_SEQUENCE_LENGTH = MAX_COMMANDS + 2  # +2 for SOS and EOS tokens

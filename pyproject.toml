@@ -21,7 +21,8 @@ dependencies = [
     "skia-pathops",
     "torchmetrics",
     "torchvision",
-    "jaxtyping"
+    "jaxtyping",
+    "pycocotools",
 ]
 # Also pydiffvg but that's not on pypi!
 

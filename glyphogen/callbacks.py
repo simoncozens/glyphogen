@@ -258,7 +258,7 @@ def log_bounding_boxes(model, data_loader, writer, epoch, num_images=4):
         if gt_target["gt_contours"]:
             gt_boxes = torch.stack([c["box"] for c in gt_target["gt_contours"]])
             gt_labels = [
-                f"GT: {'hole' if c['label']==1 else 'outer'}"
+                f"GT: {'hole' if c['label']==2 else 'outer'}"
                 for c in gt_target["gt_contours"]
             ]
         else:
