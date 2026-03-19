@@ -364,6 +364,7 @@ def main():
         test_conn,
         start_img_id=train_img_id,
         start_ann_id=train_ann_id,
+        train=False,
     )
     test_conn.close()
 

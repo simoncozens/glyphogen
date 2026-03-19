@@ -18,6 +18,7 @@ class ModelResults(NamedTuple):
         Float[torch.Tensor, "4"]
     ]  # Added field for contour bounding boxes
     pred_categories: List[int]
+    lstm_outputs: List[torch.Tensor]
 
     @classmethod
     def empty(cls) -> "ModelResults":
@@ -33,6 +34,7 @@ class ModelResults(NamedTuple):
             used_teacher_forcing=False,
             contour_boxes=[],
             pred_categories=[],
+            lstm_outputs=[],
         )
 
 
@@ -52,6 +54,7 @@ class LossDictionary(TypedDict):
     coord_loss: Float[torch.Tensor, ""]
     signed_area_loss: Float[torch.Tensor, ""]
     alignment_loss: Float[torch.Tensor, ""]
+    contrastive_loss: Float[torch.Tensor, ""]
     command_accuracy_metric: Float[torch.Tensor, ""]
     coordinate_mae_metric: Float[torch.Tensor, ""]
 

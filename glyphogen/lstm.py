@@ -47,6 +47,7 @@ class LSTMDecoder(nn.Module):
             command_logits (Tensor): Shape (batch_size, 1, MODEL_REPRESENTATION.command_width)
             coord_output (Tensor): Shape (batch_size, 1, MODEL_REPRESENTATION.coordinate_width)
             hidden_state (tuple): New hidden state of the LSTM.
+            x (Tensor): Raw output from LSTM layer, shape (batch_size, 1, proj_size)
         """
         command_input = input_token[:, :, : MODEL_REPRESENTATION.command_width].float()
         coord_input = input_token[
@@ -79,7 +80,7 @@ class LSTMDecoder(nn.Module):
         coord_head_input = torch.cat([x, command_logits], dim=-1)
         coord_output = self.output_coords(coord_head_input)
 
-        return command_logits, coord_output, hidden_state
+        return command_logits, coord_output, hidden_state, x
 
     def forward(self, x_std, context=None, teacher_forcing_ratio=1.0):
         """
@@ -93,13 +94,15 @@ class LSTMDecoder(nn.Module):
         hidden_state = None
         all_command_logits = []
         all_coord_outputs_std = []
+        all_lstm_outputs = []
 
         for i in range(seq_len):
-            command_logits, coord_output_std, hidden_state = self._forward_step(
+            command_logits, coord_output_std, hidden_state, lstm_out = self._forward_step(
                 current_input_std, context, hidden_state
             )
             all_command_logits.append(command_logits)
             all_coord_outputs_std.append(coord_output_std)
+            all_lstm_outputs.append(lstm_out)
 
             use_teacher_forcing = random.random() < teacher_forcing_ratio
             if i + 1 < seq_len:
@@ -135,4 +138,5 @@ class LSTMDecoder(nn.Module):
 
         command_output = torch.cat(all_command_logits, dim=1)
         coord_output_std = torch.cat(all_coord_outputs_std, dim=1)
-        return command_output, coord_output_std
+        lstm_output = torch.cat(all_lstm_outputs, dim=1)
+        return command_output, coord_output_std, lstm_output

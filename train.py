@@ -97,6 +97,7 @@ def main(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     torch.set_float32_matmul_precision("high")
+    #torch.autograd.set_detect_anomaly(True)
 
     torch.manual_seed(1234)
 

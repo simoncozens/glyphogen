@@ -234,6 +234,7 @@ class VectorizationGenerator(nn.Module):
         glyph_gt_coords_std = []
         glyph_pred_means = []
         glyph_pred_stds = []
+        glyph_lstm_outputs = []
 
         # Prepare batch for decoder
         decoder_inputs_norm = [
@@ -265,7 +266,7 @@ class VectorizationGenerator(nn.Module):
         decoder_input_std = torch.cat([commands_norm, coords_std, heading], dim=-1)
         # --- END NEW LOGIC ---
 
-        pred_commands_batch, pred_coords_std_batch = self.decoder(
+        pred_commands_batch, pred_coords_std_batch, lstm_outputs_batch = self.decoder(
             decoder_input_std,  # Pass standardized input
             context=z_batch,
             teacher_forcing_ratio=teacher_forcing_ratio
@@ -284,8 +285,10 @@ class VectorizationGenerator(nn.Module):
             # --- Predictions ---
             pred_commands = pred_commands_batch[i, :seq_len, :]
             pred_coords_std = pred_coords_std_batch[i, :seq_len, :]
+            lstm_outputs = lstm_outputs_batch[i, :seq_len, :]
             glyph_pred_commands.append(pred_commands)
             glyph_pred_coords_std.append(pred_coords_std)
+            glyph_lstm_outputs.append(lstm_outputs)
 
             # --- De-standardize for metrics and logging ---
             pred_command_indices = torch.argmax(pred_commands, dim=-1)
@@ -323,6 +326,7 @@ class VectorizationGenerator(nn.Module):
             used_teacher_forcing=True,
             contour_boxes=valid_boxes,
             pred_categories=labels,
+            lstm_outputs=glyph_lstm_outputs,
         )
 
     def autoregression(
@@ -337,11 +341,11 @@ class VectorizationGenerator(nn.Module):
         glyph_pred_coords_std = []
         glyph_pred_means = []
         glyph_pred_stds = []
+        glyph_lstm_outputs = []
 
         batch_size = len(valid_boxes)
         device = z_batch.device
         sos_index = MODEL_REPRESENTATION.encode_command("SOS")
-
         # --- Standardize the initial SOS input ---
         command_part = torch.zeros(
             batch_size, 1, MODEL_REPRESENTATION.command_width, device=device
@@ -372,7 +376,7 @@ class VectorizationGenerator(nn.Module):
 
             active_z = z_batch[active_indices]
 
-            command_logits, coord_output_std, hidden_state = self.decoder._forward_step(  # type: ignore
+            command_logits, coord_output_std, hidden_state, _ = self.decoder._forward_step(  # type: ignore
                 current_input_std, active_z, hidden_state
             )
 
@@ -490,6 +494,7 @@ class VectorizationGenerator(nn.Module):
             used_teacher_forcing=False,
             contour_boxes=valid_boxes,
             pred_categories=pred_categories,
+            lstm_outputs=[], # No lstm_outputs in autoregression
         )
 
 
@@ -509,6 +514,7 @@ def step(
             "command_accuracy_metric": torch.tensor(0.0, device=device),
             "coordinate_mae_metric": torch.tensor(0.0, device=device),
             "alignment_loss": torch.tensor(0.0, device=device),
+            "contrastive_loss": torch.tensor(0.0, device=device),
         }
         return final_losses, []
 

@@ -8,6 +8,7 @@ import sys
 from glyphogen.representations.model import MODEL_REPRESENTATION
 from glyphogen.hyperparameters import (
     ALIGNMENT_LOSS_WEIGHT,
+    CONTRASTIVE_LOSS_WEIGHT,
     HUBER_DELTA,
     SIGNED_AREA_WEIGHT,
     VECTOR_LOSS_WEIGHT_COMMAND,
@@ -23,6 +24,30 @@ from glyphogen.typing import (
 
 if TYPE_CHECKING:
     from glyphogen.model import VectorizationGenerator
+
+
+def fill_diagonal(t):
+    # Our version which *doesn't* do it in place
+    return t * (1 - torch.eye(*t.shape).to(t.device))
+
+
+def supervised_contrastive_loss(embeddings, labels, temperature=0.07):
+    embeddings = F.normalize(embeddings, dim=-1)
+    similarity = torch.matmul(embeddings, embeddings.T) / temperature
+    
+    # Mask for positive pairs (same class, different instance)
+    labels = labels.unsqueeze(1)
+    positive_mask = (labels == labels.T).float()
+    positive_mask = fill_diagonal(positive_mask)
+    
+    # Standard contrastive formulation
+    exp_sim = torch.exp(similarity)
+    #exp_sim.fill_diagonal_(0)  # exclude self from denominator
+    exp_sim = fill_diagonal(exp_sim)
+    
+    log_prob = similarity - torch.log(exp_sim.sum(dim=-1, keepdim=True))
+    loss = -(log_prob * positive_mask).sum(dim=-1) / positive_mask.sum(dim=-1).clamp(min=1)
+    return loss.mean()
 
 
 @torch.compile
@@ -43,6 +68,7 @@ def losses(
     gt_coords_std_list = outputs.gt_coords_std
     pred_means_list = outputs.pred_means
     pred_stds_list = outputs.pred_stds
+    lstm_outputs_list = outputs.lstm_outputs
 
     # Data from the collated batch
     gt_target_sequences = collated_batch["target_sequences"]
@@ -58,6 +84,8 @@ def losses(
     total_coord_mae_metric = torch.tensor(0.0, device=device)
     total_correct_cmds = 0
     total_cmds = 0
+    all_contrastive_embeddings = []
+    all_contrastive_labels = []
 
     if num_contours_to_compare == 0:
         return {
@@ -66,6 +94,7 @@ def losses(
             "coord_loss": torch.tensor(0.0, device=device),
             "signed_area_loss": torch.tensor(0.0, device=device),
             "alignment_loss": torch.tensor(0.0, device=device),
+            "contrastive_loss": torch.tensor(0.0, device=device),
             "command_accuracy_metric": torch.tensor(0.0, device=device),
             "coordinate_mae_metric": torch.tensor(0.0, device=device),
         }
@@ -77,6 +106,7 @@ def losses(
         pred_means = pred_means_list[i]
         pred_stds = pred_stds_list[i]
         box = contour_boxes[i]
+        lstm_outputs = lstm_outputs_list[i]
 
         gt_sequence_img_space = gt_target_sequences[i].to(device)
         gt_sequence_norm = MODEL_REPRESENTATION.image_space_to_mask_space(
@@ -130,6 +160,10 @@ def losses(
         if abs_pred_command.shape[0] == 0:
             continue
 
+        # Collect embeddings and labels for contrastive loss
+        all_contrastive_embeddings.append(lstm_outputs)
+        all_contrastive_labels.append(gt_command_for_loss.argmax(dim=-1))
+
         # 2b. Global loss on absolute, unrolled coordinates
         coord_loss_absolute = masked_absolute_coordinate_loss(
             device, abs_gt_command, abs_gt_coords, abs_pred_coords
@@ -180,6 +214,23 @@ def losses(
         )
         total_coord_mae_metric += coord_mae_metric
 
+    if all_contrastive_embeddings:
+        embeddings_flat = torch.cat(all_contrastive_embeddings, dim=0)
+        labels_flat = torch.cat(all_contrastive_labels, dim=0)
+        # Filter out SOS and EOS from contrastive loss
+        eos_idx = MODEL_REPRESENTATION.encode_command("EOS")
+        sos_idx = MODEL_REPRESENTATION.encode_command("SOS")
+        valid_indices_mask = (labels_flat != eos_idx) & (labels_flat != sos_idx)
+        embeddings_filtered = embeddings_flat[valid_indices_mask]
+        labels_filtered = labels_flat[valid_indices_mask]
+
+        if embeddings_filtered.shape[0] > 1:
+             contrastive_loss = supervised_contrastive_loss(embeddings_filtered, labels_filtered)
+        else:
+             contrastive_loss = torch.tensor(0.0, device=device)
+    else:
+        contrastive_loss = torch.tensor(0.0, device=device)
+
     def average_a_loss(loss):
         return (
             loss / num_contours_to_compare
@@ -203,6 +254,7 @@ def losses(
         + VECTOR_LOSS_WEIGHT_COORD * avg_coord_loss
         + SIGNED_AREA_WEIGHT * avg_signed_area_loss
         + ALIGNMENT_LOSS_WEIGHT * avg_alignment_loss
+        + CONTRASTIVE_LOSS_WEIGHT * contrastive_loss
     )
 
     return {
@@ -211,6 +263,7 @@ def losses(
         "coord_loss": avg_coord_loss.detach(),
         "signed_area_loss": avg_signed_area_loss.detach(),
         "alignment_loss": avg_alignment_loss.detach(),
+        "contrastive_loss": contrastive_loss.detach(),
         "command_accuracy_metric": command_accuracy,
         "coordinate_mae_metric": avg_coord_mae_metric.detach(),
     }
