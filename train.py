@@ -162,9 +162,25 @@ def main(
     ) - 1  # Last batch is dropped, simulate a 1/3 size validation set
 
     # Optimizer and Loss
+    # Separate parameter groups for different parts of the model
+    # The `name` for each group will be used for logging learning rates.
+    # The parameters are identified by their object id.
+    lstm_params = list(model.decoder.lstm.parameters())
+    output_command_params = list(model.decoder.output_command.parameters())
+    output_coords_params = list(model.decoder.output_coords.parameters())
+    special_params_ids = set(id(p) for p in lstm_params + output_command_params + output_coords_params)
+    other_params = [p for p in model.parameters() if id(p) not in special_params_ids]
+
+    optimizer_grouped_parameters = [
+        {'params': other_params, 'name': 'other'},  # Default group
+        {'params': lstm_params, 'name': 'lstm'},
+        {'params': output_command_params, 'name': 'output_command', 'weight_decay': 1e-4},
+        {'params': output_coords_params, 'name': 'output_coords'},
+    ]
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=torch.tensor(LEARNING_RATE), 
-        weight_decay=0.005
+        optimizer_grouped_parameters,
+        lr=torch.tensor(LEARNING_RATE),
+        weight_decay=0.005,
     )
 
     @torch.compile(fullgraph=False)
@@ -259,9 +275,10 @@ def main(
 
             global_step += 1
             scheduler.step()  # Step the scheduler each batch
-            train_writer.add_scalar(
-                "Learning Rate", scheduler.get_last_lr()[0], global_step
-            )
+            lrs = scheduler.get_last_lr()
+            for i, lr in enumerate(lrs):
+                group_name = optimizer.param_groups[i].get("name", f"group_{i}")
+                train_writer.add_scalar(f"Learning_Rate/{group_name}", lr, global_step)
 
         dump_accumulators(loss_accumulators, train_writer, epoch, i)
         train_writer.flush()
