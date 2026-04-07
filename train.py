@@ -30,9 +30,15 @@ from glyphogen.hyperparameters import (
     D_MODEL,
     EPOCHS,
     LATENT_DIM,
-    LEARNING_RATE,
     RATE,
-    FINAL_LEARNING_RATE,
+    LR_OTHER_START,
+    LR_OTHER_FINAL,
+    LR_LSTM_START,
+    LR_LSTM_FINAL,
+    LR_OUTPUT_COMMAND_START,
+    LR_OUTPUT_COMMAND_FINAL,
+    LR_OUTPUT_COORDS_START,
+    LR_OUTPUT_COORDS_FINAL,
     SCHEDULED_SAMPLING_START_EPOCH,
     SCHEDULED_SAMPLING_END_EPOCH,
     SCHEDULED_SAMPLING_MIN_RATIO,
@@ -97,7 +103,7 @@ def main(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     torch.set_float32_matmul_precision("high")
-    #torch.autograd.set_detect_anomaly(True)
+    # torch.autograd.set_detect_anomaly(True)
 
     torch.manual_seed(1234)
 
@@ -135,7 +141,11 @@ def main(
         sample_weights = []
         from tqdm import tqdm
 
-        for i in tqdm(range(len(train_dataset)), desc="Calculating sampler weights"):
+        if canary is not None:
+            weight_count = min(len(train_dataset), canary)
+        else:
+            weight_count = len(train_dataset)
+        for i in tqdm(range(weight_count), desc="Calculating sampler weights"):
             _, targets = train_dataset[i]
             if not targets or not targets["gt_contours"]:
                 sample_weights.append(0.0)
@@ -220,18 +230,29 @@ def main(
     lstm_params = list(model.decoder.lstm.parameters())
     output_command_params = list(model.decoder.output_command.parameters())
     output_coords_params = list(model.decoder.output_coords.parameters())
-    special_params_ids = set(id(p) for p in lstm_params + output_command_params + output_coords_params)
+    special_params_ids = set(
+        id(p) for p in lstm_params + output_command_params + output_coords_params
+    )
     other_params = [p for p in model.parameters() if id(p) not in special_params_ids]
 
     optimizer_grouped_parameters = [
-        {'params': other_params, 'name': 'other'},  # Default group
-        {'params': lstm_params, 'name': 'lstm'},
-        {'params': output_command_params, 'name': 'output_command', 'weight_decay': 1e-4},
-        {'params': output_coords_params, 'name': 'output_coords'},
+        {"params": other_params, "name": "other", "lr": LR_OTHER_START},
+        {"params": lstm_params, "name": "lstm", "lr": LR_LSTM_START},
+        {
+            "params": output_command_params,
+            "name": "output_command",
+            "lr": LR_OUTPUT_COMMAND_START,
+            "weight_decay": 1e-4,
+        },
+        {
+            "params": output_coords_params,
+            "name": "output_coords",
+            "lr": LR_OUTPUT_COORDS_START,
+        },
     ]
     optimizer = torch.optim.AdamW(
         optimizer_grouped_parameters,
-        lr=torch.tensor(LEARNING_RATE),
+        lr=LR_OTHER_START,
         weight_decay=0.005,
     )
 
@@ -239,11 +260,31 @@ def main(
     def compiled_opt_step():
         optimizer.step()
 
-    # Work out gamma from number of steps and start/end learning rate
-    # final_learning_rate = LEARNING_RATE * (gamma ** steps)
-    gamma = (FINAL_LEARNING_RATE / LEARNING_RATE) ** (1 / (train_batch_count * epochs))
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
-    scheduler = WarmupLR(scheduler, 0, num_warmup = WARMUP_STEPS)
+    total_training_steps = max(1, train_batch_count * epochs)
+
+    def exponential_decay_lambda(start_lr, final_lr):
+        if start_lr <= 0:
+            raise ValueError(f"Expected positive start LR, got {start_lr}")
+        if final_lr <= 0:
+            raise ValueError(f"Expected positive final LR, got {final_lr}")
+
+        decay_ratio = final_lr / start_lr
+
+        def lr_lambda(current_step):
+            return decay_ratio ** (current_step / total_training_steps)
+
+        return lr_lambda
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=[
+            exponential_decay_lambda(LR_OTHER_START, LR_OTHER_FINAL),
+            exponential_decay_lambda(LR_LSTM_START, LR_LSTM_FINAL),
+            exponential_decay_lambda(LR_OUTPUT_COMMAND_START, LR_OUTPUT_COMMAND_FINAL),
+            exponential_decay_lambda(LR_OUTPUT_COORDS_START, LR_OUTPUT_COORDS_FINAL),
+        ],
+    )
+    scheduler = WarmupLR(scheduler, 0, num_warmup=WARMUP_STEPS)
 
     # Note we are stepping the scheduler each batch, not each epoch
 
@@ -328,8 +369,10 @@ def main(
             global_step += 1
             scheduler.step()  # Step the scheduler each batch
             lrs = scheduler.get_last_lr()
-            for i, lr in enumerate(lrs):
-                group_name = optimizer.param_groups[i].get("name", f"group_{i}")
+            for lr_idx, lr in enumerate(lrs):
+                group_name = optimizer.param_groups[lr_idx].get(
+                    "name", f"group_{lr_idx}"
+                )
                 train_writer.add_scalar(f"Learning_Rate/{group_name}", lr, global_step)
 
         dump_accumulators(loss_accumulators, train_writer, epoch, i)
