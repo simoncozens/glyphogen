@@ -50,7 +50,7 @@ from glyphogen.representations.model import MODEL_REPRESENTATION
 do_validation = True
 
 
-def dump_accumulators(accumulators, writer, epoch, batch_idx, step=None):
+def dump_accumulators(accumulators, writer, epoch, batch_idx, step=None, flush=False):
     for key, value in accumulators.items():
         if step is not None:
             avg_value = value
@@ -65,7 +65,8 @@ def dump_accumulators(accumulators, writer, epoch, batch_idx, step=None):
         else:
             scalar_key = key.replace("_metric", "")
             writer.add_scalar(f"{prefix}Metric/{scalar_key}", avg_value, epoch)
-    writer.flush()
+    if flush:
+        writer.flush()
 
 
 def write_gradient_norms(model, losses, writer, step):
@@ -94,6 +95,7 @@ def main(
     debug_grads=False,
     load_model=False,
     segmentation_model="glyphogen.segmenter.pt",
+    tf32=True,
 ):
     random.seed(1234)
 
@@ -103,6 +105,11 @@ def main(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     torch.set_float32_matmul_precision("high")
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = tf32
+        torch.backends.cudnn.allow_tf32 = tf32
+        print(f"TF32 enabled: {tf32}")
     # torch.autograd.set_detect_anomaly(True)
 
     torch.manual_seed(1234)
@@ -256,10 +263,6 @@ def main(
         weight_decay=0.005,
     )
 
-    @torch.compile(fullgraph=False)
-    def compiled_opt_step():
-        optimizer.step()
-
     total_training_steps = max(1, train_batch_count * epochs)
 
     def exponential_decay_lambda(start_lr, final_lr):
@@ -339,6 +342,7 @@ def main(
         for i, batch in enumerate(train_loader):
             if canary is not None and i >= canary:
                 break
+
             optimizer.zero_grad()
             losses, _ = step(
                 model,
@@ -353,10 +357,19 @@ def main(
 
             losses["total_loss"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            compiled_opt_step()
+            optimizer.step()
+
             for loss_key, loss_value in losses.items():
                 loss_accumulators[loss_key] += loss_value.item()
-            dump_accumulators(losses, train_writer, epoch, i, step=global_step)
+
+            dump_accumulators(
+                losses,
+                train_writer,
+                epoch,
+                i,
+                step=global_step,
+                flush=global_step % 1000 == 0,
+            )
 
             kbar.update(
                 i,
@@ -375,7 +388,8 @@ def main(
                 )
                 train_writer.add_scalar(f"Learning_Rate/{group_name}", lr, global_step)
 
-        dump_accumulators(loss_accumulators, train_writer, epoch, i)
+        dump_accumulators(loss_accumulators, train_writer, epoch, i, flush=True)
+
         train_writer.flush()
 
         ## VALIDATION ##
@@ -420,7 +434,7 @@ def main(
 
             avg_val_loss = total_val_loss / (0.1 + i)
             avg_val_metric = loss_accumulators["raster_metric"] / (0.1 + i)
-            dump_accumulators(loss_accumulators, val_writer, epoch, i)
+            dump_accumulators(loss_accumulators, val_writer, epoch, i, flush=True)
             print(
                 f"Epoch {epoch}, Validation Loss: {avg_val_loss}; Metric: {avg_val_metric}"
             )
@@ -482,6 +496,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Whether to log gradient norms for debugging.",
     )
+    parser.add_argument(
+        "--tf32",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable TensorFloat-32 for CUDA matmul/cuDNN when running in FP32.",
+    )
     args = parser.parse_args()
     main(
         model_name=args.model_name,
@@ -490,4 +510,5 @@ if __name__ == "__main__":
         canary=args.canary,
         load_model=args.load_model,
         segmentation_model=args.segmentation_model,
+        tf32=args.tf32,
     )

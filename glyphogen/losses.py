@@ -34,19 +34,21 @@ def fill_diagonal(t):
 def supervised_contrastive_loss(embeddings, labels, temperature=0.07):
     embeddings = F.normalize(embeddings, dim=-1)
     similarity = torch.matmul(embeddings, embeddings.T) / temperature
-    
+
     # Mask for positive pairs (same class, different instance)
     labels = labels.unsqueeze(1)
     positive_mask = (labels == labels.T).float()
     positive_mask = fill_diagonal(positive_mask)
-    
+
     # Standard contrastive formulation
     exp_sim = torch.exp(similarity)
-    #exp_sim.fill_diagonal_(0)  # exclude self from denominator
+    # exp_sim.fill_diagonal_(0)  # exclude self from denominator
     exp_sim = fill_diagonal(exp_sim)
-    
+
     log_prob = similarity - torch.log(exp_sim.sum(dim=-1, keepdim=True))
-    loss = -(log_prob * positive_mask).sum(dim=-1) / positive_mask.sum(dim=-1).clamp(min=1)
+    loss = -(log_prob * positive_mask).sum(dim=-1) / positive_mask.sum(dim=-1).clamp(
+        min=1
+    )
     return loss.mean()
 
 
@@ -225,9 +227,11 @@ def losses(
         labels_filtered = labels_flat[valid_indices_mask]
 
         if embeddings_filtered.shape[0] > 1:
-             contrastive_loss = supervised_contrastive_loss(embeddings_filtered, labels_filtered)
+            contrastive_loss = supervised_contrastive_loss(
+                embeddings_filtered, labels_filtered
+            )
         else:
-             contrastive_loss = torch.tensor(0.0, device=device)
+            contrastive_loss = torch.tensor(0.0, device=device)
     else:
         contrastive_loss = torch.tensor(0.0, device=device)
 
@@ -346,7 +350,7 @@ def masked_relative_std_coordinate_loss(
     elementwise_coord_loss = F.l1_loss(
         pred_coords_std,
         gt_coords_std,
-        #delta = 0.1,
+        # delta = 0.1,
         reduction="none",
     )
     masked_coord_loss = elementwise_coord_loss * coord_mask

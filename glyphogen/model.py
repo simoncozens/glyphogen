@@ -257,19 +257,19 @@ class VectorizationGenerator(nn.Module):
         command_indices = torch.argmax(commands_norm, dim=-1)
         means, stds = MODEL_REPRESENTATION.get_stats_for_sequence(command_indices)
         coords_std = MODEL_REPRESENTATION.standardize(coords_norm, means, stds)
-        
+
         # Calculate Heading
         deltas = MODEL_REPRESENTATION.compute_deltas(decoder_input_batch)
         deltas_norm = torch.norm(deltas, p=2, dim=-1, keepdim=True)
         heading = deltas / (deltas_norm + 1e-8)
-        
+
         decoder_input_std = torch.cat([commands_norm, coords_std, heading], dim=-1)
         # --- END NEW LOGIC ---
 
         pred_commands_batch, pred_coords_std_batch, lstm_outputs_batch = self.decoder(
             decoder_input_std,  # Pass standardized input
             context=z_batch,
-            teacher_forcing_ratio=teacher_forcing_ratio
+            teacher_forcing_ratio=teacher_forcing_ratio,
         )
 
         # Unpad and handle results
@@ -494,12 +494,16 @@ class VectorizationGenerator(nn.Module):
             used_teacher_forcing=False,
             contour_boxes=valid_boxes,
             pred_categories=pred_categories,
-            lstm_outputs=[], # No lstm_outputs in autoregression
+            lstm_outputs=[],  # No lstm_outputs in autoregression
         )
 
 
 def step(
-    model, batch, writer, global_step, teacher_forcing_ratio=1.0
+    model,
+    batch,
+    writer,
+    global_step,
+    teacher_forcing_ratio=1.0,
 ) -> Tuple[LossDictionary, List[ModelResults]]:
     device = next(model.parameters()).device
     collated_batch = batch

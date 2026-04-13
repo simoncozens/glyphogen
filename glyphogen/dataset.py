@@ -346,10 +346,12 @@ def get_transform(train):
     """
     Defines the transformations to be applied to the dataset.
     """
-    return T.Compose([
-        T.ToImage(), 
-        T.ToDtype(torch.float32, scale=True),
-    ])
+    return T.Compose(
+        [
+            T.ToImage(),
+            T.ToDtype(torch.float32, scale=True),
+        ]
+    )
 
 
 def get_hierarchical_data(train_transform=None, test_transform=None):

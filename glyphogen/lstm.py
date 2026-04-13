@@ -90,6 +90,43 @@ class LSTMDecoder(nn.Module):
         The returned `coord_output_std` is also in STANDARDIZED space.
         """
         batch_size, seq_len, _ = x_std.shape
+
+        # Fast path: with pure teacher forcing we can run the whole sequence in one
+        # cuDNN LSTM call instead of token-by-token Python control flow.
+        if teacher_forcing_ratio >= 1.0:
+            command_input = x_std[:, :, : MODEL_REPRESENTATION.command_width].float()
+            coord_input = x_std[
+                :,
+                :,
+                MODEL_REPRESENTATION.command_width : MODEL_REPRESENTATION.command_width
+                + MODEL_REPRESENTATION.coordinate_width,
+            ].float()
+            heading_input = x_std[
+                :,
+                :,
+                MODEL_REPRESENTATION.command_width
+                + MODEL_REPRESENTATION.coordinate_width :,
+            ].float()
+
+            command_emb = self.command_embedding(command_input)
+            coord_emb = self.coord_embedding(coord_input)
+            heading_emb = self.heading_embedding(heading_input)
+
+            x = command_emb + coord_emb + heading_emb
+            x = self.dropout(x)
+
+            if context is not None:
+                context_expanded = context.expand(-1, seq_len, -1)
+                x = torch.cat([x, context_expanded], dim=-1)
+
+            x, _ = self.lstm(x)
+            x = self.layer_norm(x)
+
+            command_output = self.output_command(x)
+            coord_head_input = torch.cat([x, command_output], dim=-1)
+            coord_output_std = self.output_coords(coord_head_input)
+            return command_output, coord_output_std, x
+
         current_input_std = x_std[:, 0:1, :]
         hidden_state = None
         all_command_logits = []
@@ -97,8 +134,8 @@ class LSTMDecoder(nn.Module):
         all_lstm_outputs = []
 
         for i in range(seq_len):
-            command_logits, coord_output_std, hidden_state, lstm_out = self._forward_step(
-                current_input_std, context, hidden_state
+            command_logits, coord_output_std, hidden_state, lstm_out = (
+                self._forward_step(current_input_std, context, hidden_state)
             )
             all_command_logits.append(command_logits)
             all_coord_outputs_std.append(coord_output_std)

@@ -4,15 +4,15 @@ D_MODEL = 512
 PROJ_SIZE = D_MODEL // 4
 RATE = 0  # Specifically, the dropout rate
 EPOCHS = 50
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 RASTER_LOSS_WEIGHT = 15000.0
 
 # Vectorization sub-model weights
 VECTOR_LOSS_WEIGHT_COMMAND = 1.0  # Keep this at 1, normalize others against it
 # VECTOR_RASTERIZATION_LOSS_WEIGHT = 0.01
-VECTOR_LOSS_WEIGHT_COORD = 10.0
+VECTOR_LOSS_WEIGHT_COORD = 100.0
 VECTOR_LOSS_WEIGHT_COORD_ABSOLUTE = (
-    0.5  # Ratio of absolute coord loss to relative coord loss
+    1  # Ratio of absolute coord loss to relative coord loss
 )
 
 SIGNED_AREA_WEIGHT = 0.05
@@ -26,14 +26,14 @@ HUBER_DELTA = (
 LOSS_IMAGE_SIZE = 256  # Size to rasterize images to for raster loss calculation
 
 # Learning rate schedule (per parameter group)
-LR_OTHER_START = 1e-4
+LR_OTHER_START = 1e-3
 LR_OTHER_FINAL = 1e-5
-LR_LSTM_START = 1e-4
+LR_LSTM_START = 1e-3
 LR_LSTM_FINAL = 1e-5
 LR_OUTPUT_COMMAND_START = 1e-4
 LR_OUTPUT_COMMAND_FINAL = 1e-5
 LR_OUTPUT_COORDS_START = 1e-4
-LR_OUTPUT_COORDS_FINAL = 1e-6
+LR_OUTPUT_COORDS_FINAL = 1e-5
 
 WARMUP_STEPS = 100
 
