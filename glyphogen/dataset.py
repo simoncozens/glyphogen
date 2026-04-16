@@ -17,7 +17,7 @@ from torch.utils.data import Dataset
 from torchvision.datasets import CocoDetection
 
 from glyphogen.representations.model import MODEL_REPRESENTATION
-from glyphogen.hyperparameters import BASE_DIR
+from glyphogen.hyperparameters import BASE_DIR, GEN_IMAGE_SIZE
 from glyphogen.typing import CollatedGlyphData, GroundTruthContour, Target
 
 # This file is now much simpler as it's only used by the hierarchical model.
@@ -212,7 +212,7 @@ class GlyphSqliteDataset(Dataset):
 
             if x1i >= x2i or y1i >= y2i:
                 normalized_mask = torch.zeros(
-                    (1, 1, 512, 512),
+                    (1, 1, *GEN_IMAGE_SIZE),
                     dtype=torch.float32,
                 )
             else:
@@ -220,7 +220,7 @@ class GlyphSqliteDataset(Dataset):
                 cropped_mask = cropped_mask.unsqueeze(0).unsqueeze(0)
                 normalized_mask = F.interpolate(
                     cropped_mask.to(torch.float32),
-                    size=(512, 512),
+                    size=GEN_IMAGE_SIZE,
                     mode="bilinear",
                     align_corners=False,
                 )
@@ -307,7 +307,7 @@ def collate_fn(batch):
                     cropped_mask = mask[y1:y2, x1:x2].unsqueeze(0).unsqueeze(0)
                     normalized_mask = F.interpolate(
                         cropped_mask.to(torch.float32),
-                        size=(512, 512),
+                        size=GEN_IMAGE_SIZE,
                         mode="bilinear",
                         align_corners=False,
                     )

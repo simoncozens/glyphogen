@@ -6,6 +6,7 @@ RATE = 0  # Specifically, the dropout rate
 EPOCHS = 50
 BATCH_SIZE = 64
 RASTER_LOSS_WEIGHT = 15000.0
+GEN_IMAGE_SIZE = (128, 128)
 
 # Vectorization sub-model weights
 VECTOR_LOSS_WEIGHT_COMMAND = 1.0  # Keep this at 1, normalize others against it
@@ -21,8 +22,8 @@ CONTRASTIVE_LOSS_WEIGHT = 0.1
 
 EOS_SOFTMAX_TEMPERATURE = 0.1
 HUBER_DELTA = (
-    3.0 / 512.0
-)  # Loss computations are in normalized -1 to 1 space across a 512 pixel image.
+    3.0 / GEN_IMAGE_SIZE[0]
+)  # Loss computations are in normalized -1 to 1 space across the image.
 LOSS_IMAGE_SIZE = 256  # Size to rasterize images to for raster loss calculation
 
 # Learning rate schedule (per parameter group)
@@ -37,7 +38,6 @@ LR_OUTPUT_COORDS_FINAL = 1e-5
 
 WARMUP_STEPS = 100
 
-GEN_IMAGE_SIZE = (512, 512)
 RASTER_IMG_SIZE = GEN_IMAGE_SIZE[0]
 STYLE_IMAGE_SIZE = (168, 40)
 MAX_COMMANDS = 50

@@ -1,3 +1,4 @@
+from glyphogen.model import VectorizationGenerator
 from glyphogen.representations.svgcommand import SVGCommand
 from glyphogen.typing import CollatedGlyphData, ModelResults
 import numpy as np
@@ -212,7 +213,9 @@ def log_confusion_matrix(state, writer, epoch):
     # State is reset in the training loop
 
 
-def log_bounding_boxes(model, data_loader, writer, epoch, num_images=4):
+def log_bounding_boxes(
+    model: VectorizationGenerator, data_loader, writer, epoch, num_images=4
+):
     """Logs images with ground truth and predicted bounding boxes."""
     device = next(model.parameters()).device
     model.eval()

@@ -56,6 +56,8 @@ def get_model_instance_segmentation(num_classes, load_pretrained=True) -> MaskRC
 
 
 class VectorizationGenerator(nn.Module):
+    segmenter: MaskRCNN
+
     def __init__(
         self, segmenter_state, d_model: int, latent_dim: int = 32, rate: float = 0.1
     ):
@@ -63,26 +65,49 @@ class VectorizationGenerator(nn.Module):
         self.d_model = d_model
         self.latent_dim = latent_dim
         self.rate = rate
-        self.img_size = GEN_IMAGE_SIZE[0]
+        self.img_height, self.img_width = GEN_IMAGE_SIZE
+        self.img_size = self.img_height
 
-        self.conv1 = nn.Conv2d(1, 16, 7, padding=3, stride=2)
-        self.norm1 = nn.LayerNorm([16, 256, 256])
-        self.relu1 = nn.ReLU()
-        self.conv2 = nn.Conv2d(16, 32, 5, padding=2, stride=2)
-        self.norm2 = nn.LayerNorm([32, 128, 128])
-        self.relu2 = nn.ReLU()
-        self.conv3 = nn.Conv2d(32, 64, 5, padding=2, stride=2)
-        self.norm3 = nn.LayerNorm([64, 64, 64])
-        self.relu3 = nn.ReLU()
-        self.conv4 = nn.Conv2d(64, 128, 3, padding=1, stride=2)
-        self.norm4 = nn.LayerNorm([128, 32, 32])
-        self.relu4 = nn.ReLU()
-        self.conv5 = nn.Conv2d(128, 256, 3, padding=1, stride=2)
-        self.norm5 = nn.LayerNorm([256, 16, 16])
-        self.relu5 = nn.ReLU()
+        # Build the convolutional pyramid from image resolution.
+        target_feature_size = 8
+        channel_schedule = [16, 32, 64, 128, 256]
+        kernel_schedule = [7, 5, 5, 3, 3]
+        in_channels = 1
+        current_h, current_w = self.img_height, self.img_width
+        self.num_pyramid_layers = 0
+
+        for i, (out_channels, kernel_size) in enumerate(
+            zip(channel_schedule, kernel_schedule), start=1
+        ):
+            if (
+                i > 1
+                and current_h <= target_feature_size
+                and current_w <= target_feature_size
+            ):
+                break
+
+            conv = nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size,
+                padding=kernel_size // 2,
+                stride=2,
+            )
+            current_h = (current_h + 1) // 2
+            current_w = (current_w + 1) // 2
+            norm = nn.LayerNorm([out_channels, current_h, current_w])
+            relu = nn.ReLU()
+
+            setattr(self, f"conv{i}", conv)
+            setattr(self, f"norm{i}", norm)
+            setattr(self, f"relu{i}", relu)
+
+            in_channels = out_channels
+            self.num_pyramid_layers += 1
+
         self.dropout = nn.Dropout(rate)
         self.flatten = nn.Flatten()
-        self.dense = nn.Linear(256 * 16 * 16, latent_dim)
+        self.dense = nn.Linear(in_channels * current_h * current_w, latent_dim)
         self.norm_dense = nn.LayerNorm(latent_dim)
         self.sigmoid = nn.Sigmoid()
         self.output_dense = nn.Linear(latent_dim, latent_dim)
@@ -111,26 +136,12 @@ class VectorizationGenerator(nn.Module):
     @torch.compile
     def encode(self, inputs):
         """Return a latent vector encoding of the input mask images."""
-        x = self.conv1(inputs)
-        x = self.norm1(x)
-        x = self.relu1(x)
-        x = self.dropout(x)
-        x = self.conv2(x)
-        x = self.norm2(x)
-        x = self.relu2(x)
-        x = self.dropout(x)
-        x = self.conv3(x)
-        x = self.norm3(x)
-        x = self.relu3(x)
-        x = self.dropout(x)
-        x = self.conv4(x)
-        x = self.norm4(x)
-        x = self.relu4(x)
-        x = self.dropout(x)
-        x = self.conv5(x)
-        x = self.norm5(x)
-        x = self.relu5(x)
-        x = self.dropout(x)
+        x = inputs
+        for i in range(1, self.num_pyramid_layers + 1):
+            x = getattr(self, f"conv{i}")(x)
+            x = getattr(self, f"norm{i}")(x)
+            x = getattr(self, f"relu{i}")(x)
+            x = self.dropout(x)
         x = self.flatten(x)
         x = self.dense(x)
         x = self.dropout(x)
@@ -209,7 +220,7 @@ class VectorizationGenerator(nn.Module):
             cropped_mask = mask[y1:y2, x1:x2].unsqueeze(0).unsqueeze(0)
             normalized_mask = F.interpolate(
                 cropped_mask.to(torch.float32),
-                size=(512, 512),
+                size=GEN_IMAGE_SIZE,
                 mode="bilinear",
                 align_corners=False,
             )
