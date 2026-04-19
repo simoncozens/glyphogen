@@ -1,12 +1,10 @@
-from glyphogen.model import VectorizationGenerator
 from glyphogen.representations.svgcommand import SVGCommand
 from glyphogen.typing import CollatedGlyphData, ModelResults
-import numpy as np
 import torch
-from torchvision.utils import draw_bounding_boxes
 
 from glyphogen.losses import align_sequences
 from glyphogen.rasterizer import rasterize_batch
+from glyphogen.inference import vectorize
 
 from .representations.model import MODEL_REPRESENTATION
 from .nodeglyph import NodeGlyph
@@ -14,7 +12,7 @@ from .svgglyph import SVGGlyph
 
 
 def log_vectorizer_outputs(
-    model, data_loader, writer, epoch, num_images=4, log_svgs=True
+    model, pipeline_model, data_loader, writer, epoch, num_images=4, log_svgs=True
 ):
     """
     Unified logging function for vectorizer outputs.
@@ -44,31 +42,13 @@ def log_vectorizer_outputs(
         for i in range(min(num_images, images.shape[0])):
             img = images[i]
 
-            # Run inference using the new generate method
-            outputs: ModelResults = model.generate(img)
+            # Run full-glyph inference via segmenter+vectorizer pipeline.
+            predicted_nodeglyph = vectorize(pipeline_model, img)
 
             # --- Log Raster Visualization ---
             predicted_raster = torch.ones_like(img[0:1])
-            if outputs.pred_commands:
-                # The rasterizer expects a list of contours for a single glyph,
-                # and each contour is a tuple of (commands, coords)
-                contour_sequences = [
-                    (
-                        outputs.pred_commands[idx],
-                        outputs.pred_coords_img_space[idx],
-                    )
-                    for idx in range(len(outputs.pred_commands))
-                ]
-                # De-encode the glyph from our model representation
-                ng = NodeGlyph.decode(
-                    [
-                        torch.cat([cmds, coords], dim=-1).cpu()
-                        for cmds, coords in contour_sequences
-                    ],
-                    MODEL_REPRESENTATION,
-                )
-                # Now re-encode as SVG
-                svg_contours = ng.encode(SVGCommand)
+            if predicted_nodeglyph.contours:
+                svg_contours = predicted_nodeglyph.encode(SVGCommand) or []
                 # Filter out dead
                 svg_contours = [
                     torch.from_numpy(c) for c in svg_contours if c.shape[0] > 0
@@ -96,25 +76,12 @@ def log_vectorizer_outputs(
             writer.add_image(f"Vectorizer_Images/Overlay_{i}", overlay_image, epoch)
 
             # --- Log SVG Outputs (if enabled and epoch matches) ---
-            if log_svgs and not skip_svgs and outputs.pred_commands:
-                # Prepare contour sequences for decoding
-                contour_sequences = [
-                    torch.cat(
-                        [
-                            outputs.pred_commands[idx].cpu(),
-                            outputs.pred_coords_img_space[idx].cpu(),
-                        ],
-                        dim=-1,
-                    )
-                    for idx in range(len(outputs.pred_commands))
-                ]
-
+            if log_svgs and not skip_svgs and predicted_nodeglyph.contours:
                 try:
-                    decoded_glyph = NodeGlyph.decode(
-                        contour_sequences, MODEL_REPRESENTATION
-                    )
-                    svg_string = SVGGlyph.from_node_glyph(decoded_glyph).to_svg_string()
-                    debug_string = decoded_glyph.to_debug_string()
+                    svg_string = SVGGlyph.from_node_glyph(
+                        predicted_nodeglyph
+                    ).to_svg_string()
+                    debug_string = predicted_nodeglyph.to_debug_string()
                 except Exception as e:
                     svg_string = f"Couldn't generate SVG: {e}"
                     debug_string = "Error in decoding glyph."
@@ -144,7 +111,6 @@ def collect_confusion_matrix_data(
     pred_coords_norm_list = outputs.pred_coords_norm
 
     gt_target_sequences = collated_batch["target_sequences"]
-    contour_boxes = collated_batch["contour_boxes"]
     device = pred_commands_list[0].device  # Get device from a tensor
 
     num_contours_to_compare = len(gt_target_sequences)
@@ -152,13 +118,7 @@ def collect_confusion_matrix_data(
     for j in range(num_contours_to_compare):
         pred_command = pred_commands_list[j]
         pred_coords_norm = pred_coords_norm_list[j]
-        box = contour_boxes[j]
-
-        # Convert GT sequence from image space to normalized mask space
-        gt_sequence_img_space = gt_target_sequences[j]
-        gt_sequence_norm = MODEL_REPRESENTATION.image_space_to_mask_space(
-            gt_sequence_img_space.to(device), box
-        )
+        gt_sequence_norm = gt_target_sequences[j].to(device)
 
         (
             gt_command_for_loss,
@@ -211,81 +171,3 @@ def log_confusion_matrix(state, writer, epoch):
     writer.flush()
 
     # State is reset in the training loop
-
-
-def log_bounding_boxes(
-    model: VectorizationGenerator, data_loader, writer, epoch, num_images=4
-):
-    """Logs images with ground truth and predicted bounding boxes."""
-    device = next(model.parameters()).device
-    model.eval()
-
-    # Get a batch of data
-    try:
-        collated_batch = next(iter(data_loader))
-    except StopIteration:
-        print("Warning: Could not get a batch from data_loader for logging.")
-        return
-
-    if collated_batch is None:
-        print("Warning: Collated batch is None, skipping logging.")
-        return
-
-    # Unpack the collated batch
-    images = collated_batch["images"]
-    targets = collated_batch["gt_targets"]
-
-    # Take only num_images from the batch
-    images = images[:num_images]
-    targets = targets[:num_images]
-
-    # images is already a stacked tensor from the collate_fn.
-    images_for_segmenter = images.to(device)
-
-    # Get predictions
-    with torch.no_grad():
-        # The segmenter is part of the main model
-        predictions = model.segmenter(images_for_segmenter)
-
-    for i in range(len(images)):
-        img_tensor = images[i]
-        gt_target = targets[i]
-        pred_target = predictions[i]
-
-        # Prepare image for drawing (convert to uint8, 3 channels)
-        img_to_draw = (img_tensor.cpu() * 255).to(torch.uint8)
-        if img_to_draw.shape[0] == 1:
-            img_to_draw = img_to_draw.repeat(3, 1, 1)
-
-        # Get GT boxes and labels
-        if gt_target["gt_contours"]:
-            gt_boxes = torch.stack([c["box"] for c in gt_target["gt_contours"]])
-            gt_labels = [
-                f"GT: {'hole' if c['label']==2 else 'outer'}"
-                for c in gt_target["gt_contours"]
-            ]
-        else:
-            gt_boxes = torch.empty((0, 4))
-            gt_labels = []
-
-        # Get predicted boxes and labels
-        pred_boxes = pred_target["boxes"].cpu()
-        pred_labels = [
-            f"Pred: {'hole' if label==2 else 'outer'} ({(s*100):.0f}%)"
-            for label, s in zip(pred_target["labels"], pred_target["scores"])
-        ]
-
-        # Draw boxes on the image
-        img_with_boxes = img_to_draw
-        if pred_boxes.shape[0] > 0:
-            img_with_boxes = draw_bounding_boxes(
-                img_with_boxes, boxes=pred_boxes, labels=pred_labels, colors="red"
-            )
-        if gt_boxes.shape[0] > 0:
-            img_with_boxes = draw_bounding_boxes(
-                img_with_boxes, boxes=gt_boxes, labels=gt_labels, colors="green"
-            )
-
-        writer.add_image(f"Bounding_Boxes/Image_{i}", img_with_boxes, epoch)
-
-    writer.flush()

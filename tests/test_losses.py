@@ -39,12 +39,12 @@ def _run_loss_test(gt_glyph: NodeGlyph, pred_glyph: NodeGlyph) -> dict:
     device = torch.device("cpu")
 
     # 1. Encode GT and Pred glyphs to get their command sequences.
-    # The command sequence *must* be identical for the loss function to compare them.
-    # We use the GT commands for both, and only the coordinates differ.
+    # The command sequence must match so only geometry differs.
     gt_encoded = gt_glyph.encode(NodeCommand)
     if not gt_encoded:
         raise ValueError("Could not encode GT glyph")
-    gt_commands_tensor = torch.from_numpy(gt_encoded[0][:, : NodeCommand.command_width])
+    gt_sequence_img = torch.from_numpy(gt_encoded[0]).to(torch.float32)
+    gt_commands_tensor, _ = NodeCommand.split_tensor(gt_sequence_img)
 
     # For the prediction, we generate a sequence with the same commands but different geometry.
     pred_encoded = pred_glyph.encode(NodeCommand)
@@ -52,17 +52,20 @@ def _run_loss_test(gt_glyph: NodeGlyph, pred_glyph: NodeGlyph) -> dict:
         raise ValueError("Could not encode Pred glyph")
     pred_coords_unnorm = torch.from_numpy(
         pred_encoded[0][:, NodeCommand.command_width :]
-    )
+    ).to(torch.float32)
 
     # 2. Manually create the `collated_batch` and `ModelResults` objects.
     gt_box = _get_glyph_bounds(gt_glyph)
 
-    # The loss function expects relative, normalized coordinates for the prediction.
-    # We mimic this by normalizing our absolute prediction coordinates.
-    pred_sequence_full = torch.cat([gt_commands_tensor, pred_coords_unnorm], dim=1)
+    # Build normalized GT and Pred sequences in the same space used by collate_fn.
+    gt_sequence_norm = NodeCommand.image_space_to_mask_space(gt_sequence_img, gt_box)
+
+    pred_sequence_img = torch.cat([gt_commands_tensor, pred_coords_unnorm], dim=1)
     pred_sequence_norm = NodeCommand.image_space_to_mask_space(
-        pred_sequence_full, gt_box
+        pred_sequence_img, gt_box
     )
+
+    gt_commands_norm, gt_coords_norm = NodeCommand.split_tensor(gt_sequence_norm)
     _, pred_coords_norm = NodeCommand.split_tensor(pred_sequence_norm)
 
     # The alignment indices are based on the original NodeGlyph node order.
@@ -70,28 +73,43 @@ def _run_loss_test(gt_glyph: NodeGlyph, pred_glyph: NodeGlyph) -> dict:
     y_alignments = [[[0, 1], [3, 2]]]
 
     collated_batch: CollatedGlyphData = {
-        "target_sequences": [torch.from_numpy(s) for s in gt_encoded],
-        "contour_boxes": [gt_box],
+        "target_sequences": [gt_sequence_norm],
+        "original_boxes": torch.stack([gt_box], dim=0),
         "x_aligned_point_indices": x_alignments,
         "y_aligned_point_indices": y_alignments,
         "images": torch.empty(1, 1, 1, 1),
         "gt_targets": [],
         "normalized_masks": torch.empty(1, 1, 1, 1),
         "contour_image_idx": torch.zeros(1, dtype=torch.long),
+        "contour_filenames": ["synthetic"],
+        "contour_characters": ["#"],
+        "contour_numbers": torch.tensor([0], dtype=torch.long),
+        "labels": torch.tensor([1], dtype=torch.int64),
     }
 
     # The ModelResults should contain the model's *output*, which does not
     # include the SOS token. We slice it off here.
+    # Build standardized coordinate tensors exactly like training does.
+    pred_commands = gt_commands_norm[1:]
+    pred_command_indices = torch.argmax(pred_commands, dim=-1)
+    pred_means, pred_stds = NodeCommand.get_stats_for_sequence(pred_command_indices)
+    pred_coords_std = NodeCommand.standardize(
+        pred_coords_norm[1:], pred_means, pred_stds
+    )
+    gt_coords_std = NodeCommand.standardize(gt_coords_norm[1:], pred_means, pred_stds)
+
     model_results = ModelResults(
-        pred_commands=[gt_commands_tensor[1:]],
+        pred_commands=[pred_commands],
         pred_coords_norm=[pred_coords_norm[1:]],
-        pred_coords_img_space=[],  # Not used by losses
+        pred_coords_std=[pred_coords_std],
+        gt_coords_std=[gt_coords_std],
         used_teacher_forcing=True,
-        contour_boxes=[gt_box],
+        pred_categories=[0],
+        lstm_outputs=[torch.zeros(pred_commands.shape[0], 128)],  # Dummy LSTM output
     )
 
     # 3. Run the main losses function
-    loss_dict = losses(collated_batch, model_results, device)
+    loss_dict = losses(collated_batch, model_results, None, device)
     return {k: v.item() for k, v in loss_dict.items()}
 
 

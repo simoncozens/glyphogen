@@ -71,6 +71,11 @@ class GlyphCocoDataset(CocoDetection):
     ):  # -> DatasetItem, although the type checker hates it because you can't override __getitem__
         img, target_anns = super().__getitem__(index)
         img_id = self.ids[index]
+        img_meta = self.coco.loadImgs(img_id)[0]
+        file_name = img_meta.get("file_name", "")
+        character = img_meta.get("character", "")
+        if not character and file_name:
+            character = Path(file_name).stem
 
         # For the hierarchical model, we want a list of targets, one per contour.
         targets = []
@@ -101,12 +106,17 @@ class GlyphCocoDataset(CocoDetection):
                         "y_aligned_point_indices": ann.get(
                             "y_aligned_point_indices", []
                         ),
+                        "filename": file_name,
+                        "character": character,
+                        "contour_number": -1,
                     }
                 )
 
         # Sort targets by bounding box position (top-to-bottom, left-to-right)
         # This ensures a canonical order that matches our model's normalization.
         targets.sort(key=lambda t: (t["box"][1], t["box"][0]))
+        for contour_idx, contour in enumerate(targets):
+            contour["contour_number"] = contour_idx
 
         if self.transforms is not None:
             # Note: transforms will need to handle a list of targets
@@ -115,7 +125,12 @@ class GlyphCocoDataset(CocoDetection):
         keep = filter_out(targets)
         if not keep:
             return None
-        return img, {"image_id": img_id, "gt_contours": targets}
+        return img, {
+            "image_id": img_id,
+            "filename": file_name,
+            "character": character,
+            "gt_contours": targets,
+        }
 
 
 def _decode_blob(blob: bytes) -> np.ndarray:
@@ -239,15 +254,25 @@ class GlyphSqliteDataset(Dataset):
                     "normalized_mask": normalized_mask,
                     "x_aligned_point_indices": json.loads(x_alignments_json),
                     "y_aligned_point_indices": json.loads(y_alignments_json),
+                    "filename": file_name,
+                    "character": character,
+                    "contour_number": -1,
                 }
             )
 
         targets.sort(key=lambda t: (t["box"][1], t["box"][0]))
+        for contour_idx, contour in enumerate(targets):
+            contour["contour_number"] = contour_idx
 
         if self.transforms is not None:
             img, targets = self.transforms(img, targets)
 
-        return img, {"image_id": img_id, "gt_contours": targets}
+        return img, {
+            "image_id": img_id,
+            "filename": file_name,
+            "character": character,
+            "gt_contours": targets,
+        }
 
 
 def collate_fn(batch):
@@ -270,9 +295,12 @@ def collate_fn(batch):
     images, gt_targets = zip(*batch)
 
     all_normalized_masks = []
-    all_contour_boxes = []
+    all_original_boxes = []
     all_target_sequences = []
     all_contour_image_idx = []
+    all_contour_filenames = []
+    all_contour_characters = []
+    all_contour_numbers = []
     all_x_alignments = []
     all_y_alignments = []
     all_labels = []
@@ -316,10 +344,22 @@ def collate_fn(batch):
                 elif normalized_mask.ndim == 3:
                     normalized_mask = normalized_mask.unsqueeze(0)
 
+            sequence_norm = MODEL_REPRESENTATION.image_space_to_mask_space(
+                sequence, box
+            )
+            original_box = box.to(torch.float32).clone()
+
             all_normalized_masks.append(normalized_mask)
-            all_contour_boxes.append(box)
-            all_target_sequences.append(sequence)
+            all_original_boxes.append(original_box)
+            all_target_sequences.append(sequence_norm)
             all_contour_image_idx.append(i)
+            all_contour_filenames.append(
+                contour.get("filename", target.get("filename", ""))
+            )
+            all_contour_characters.append(
+                contour.get("character", target.get("character", ""))
+            )
+            all_contour_numbers.append(int(contour.get("contour_number", -1)))
             all_labels.append(label)
             all_x_alignments.append(contour["x_aligned_point_indices"])
             all_y_alignments.append(contour["y_aligned_point_indices"])
@@ -332,10 +372,13 @@ def collate_fn(batch):
         "images": torch.stack(images, 0),
         "gt_targets": list(gt_targets),
         "normalized_masks": torch.cat(all_normalized_masks, dim=0),
-        "contour_boxes": torch.stack(all_contour_boxes, dim=0),
+        "original_boxes": torch.stack(all_original_boxes, dim=0),
         "labels": torch.stack(all_labels, dim=0),
         "target_sequences": all_target_sequences,
         "contour_image_idx": torch.tensor(all_contour_image_idx, dtype=torch.long),
+        "contour_filenames": all_contour_filenames,
+        "contour_characters": all_contour_characters,
+        "contour_numbers": torch.tensor(all_contour_numbers, dtype=torch.long),
         "x_aligned_point_indices": all_x_alignments,
         "y_aligned_point_indices": all_y_alignments,
     }

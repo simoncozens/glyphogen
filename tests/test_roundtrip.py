@@ -5,6 +5,7 @@ from glyphogen.glyph import SVGGlyph
 from glyphogen.representations.nodecommand import (
     NodeCommand,
 )
+import uharfbuzz as hb
 
 
 def test_coordinate_transforms():
@@ -69,7 +70,10 @@ def test_real_glyph_roundtrip(char_to_test):
         pytest.skip("Skipping 'l' as it has a bad contour construction.")
 
     # 1. Load original glyph and convert to NodeGlyph
-    glyph = Glyph(font_path, ord(char_to_test), {})
+    hb_face = hb.Face(hb.Blob.from_file_path(font_path))
+    hb_font = hb.Font(hb_face)
+    gid = hb_font.get_nominal_glyph(ord(char_to_test))
+    glyph = Glyph(font_path, gid, hb_face, {})
     svg_glyph_orig = None
     try:
         svg_glyph_orig = glyph.vectorize()

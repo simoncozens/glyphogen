@@ -264,6 +264,10 @@ class NodeCommand(CommandRepresentation):
         torch.compile-friendly.
         """
         commands, coords_norm = cls.split_tensor(sequence)
+        if not isinstance(box, torch.Tensor):
+            box = torch.as_tensor(box, device=sequence.device, dtype=sequence.dtype)
+        else:
+            box = box.to(device=sequence.device, dtype=sequence.dtype)
         x1, y1, x2, y2 = box
         width = torch.clamp(x2 - x1, min=1.0)
         height = torch.clamp(y2 - y1, min=1.0)
@@ -362,7 +366,7 @@ class NodeCommand(CommandRepresentation):
         # Deltas for LH and LV (single-axis moves)
         lh_mask = command_indices == lh_index
         lv_mask = command_indices == lv_index
-        
+
         # Helper for scalar zero
         zeros_scalar = torch.zeros_like(rel_coords[..., 0])
 
@@ -382,13 +386,13 @@ class NodeCommand(CommandRepresentation):
         This is a differentiable and vectorized operation.
         """
         commands, rel_coords = cls.split_tensor(sequence)
-        
+
         # Re-use the new helper
         deltas = cls.compute_deltas(sequence)
-        
+
         command_indices = torch.argmax(commands, dim=-1)
         m_index = cls.encode_command("M")
-        
+
         # Seed absolute positions with the absolute move from the M command (vectorized)
         m_mask = command_indices == m_index
         base_pos = torch.where(
@@ -680,7 +684,27 @@ class NodeCommand(CommandRepresentation):
         contour_nodes = []
         cmd_sos_val = cls.encode_command("SOS")
         cmd_eos_val = cls.encode_command("EOS")
+        # Commands that contribute in/out Bezier handles.
         cmd_n_val = cls.encode_command("N")
+        cmd_ns_val = cls.encode_command("NS")
+        cmd_nh_val = cls.encode_command("NH")
+        cmd_nv_val = cls.encode_command("NV")
+        cmd_nci_val = cls.encode_command("NCI")
+        cmd_nco_val = cls.encode_command("NCO")
+        has_in_handle = {
+            cmd_n_val,
+            cmd_ns_val,
+            cmd_nh_val,
+            cmd_nv_val,
+            cmd_nci_val,
+        }
+        has_out_handle = {
+            cmd_n_val,
+            cmd_ns_val,
+            cmd_nh_val,
+            cmd_nv_val,
+            cmd_nco_val,
+        }
 
         for i in range(len(command_tensor)):
             command = command_tensor[i]
@@ -701,13 +725,18 @@ class NodeCommand(CommandRepresentation):
                         p1_cmd, p1_coord = contour_nodes[j]
                         p2_cmd, p2_coord = contour_nodes[(j + 1) % len(contour_nodes)]
 
-                        is_curve = (p1_cmd == cmd_n_val) and (p2_cmd == cmd_n_val)
+                        p1_cmd_i = int(p1_cmd.item())
+                        p2_cmd_i = int(p2_cmd.item())
+
+                        p1_has_out = p1_cmd_i in has_out_handle
+                        p2_has_in = p2_cmd_i in has_in_handle
+                        is_curve = p1_has_out or p2_has_in
+
                         p1_pos, p2_pos = p1_coord[0:2], p2_coord[0:2]
-                        # Handle positions are absolute.
-                        p1_hout = p1_coord[4:6]
-                        p2_hin = p2_coord[2:4]
-                        # If they change to relative, use this instead:
-                        # p1_hout, p2_hin = p1_pos + p1_coord[4:6], p2_pos + p2_coord[2:4]
+                        # Handle positions are absolute for available handles; for missing handles,
+                        # collapse to endpoint so the cubic stays valid.
+                        p1_hout = p1_coord[4:6] if p1_has_out else p1_pos
+                        p2_hin = p2_coord[2:4] if p2_has_in else p2_pos
 
                         if is_curve:
                             all_points.extend([p1_hout, p2_hin, p2_pos])

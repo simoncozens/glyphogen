@@ -22,7 +22,6 @@ from glyphogen.callbacks import (
     init_confusion_matrix_state,
     collect_confusion_matrix_data,
     log_confusion_matrix,
-    log_bounding_boxes,
 )
 from glyphogen.dataset import collate_fn, get_hierarchical_data
 from glyphogen.hyperparameters import (
@@ -45,6 +44,7 @@ from glyphogen.hyperparameters import (
     WARMUP_STEPS,
 )
 from glyphogen.model import VectorizationGenerator, step
+from glyphogen.vectorizer import ContourVectorizer
 from glyphogen.representations.model import MODEL_REPRESENTATION
 
 do_validation = True
@@ -114,9 +114,15 @@ def main(
 
     torch.manual_seed(1234)
 
-    # Model
+    # Model (train contour vectorizer only)
+    model = ContourVectorizer(
+        d_model=D_MODEL,
+        latent_dim=LATENT_DIM,
+        rate=RATE,
+    ).to(device)
+
     segmenter_state = torch.load(segmentation_model, map_location=device)
-    model = VectorizationGenerator(
+    inference_pipeline = VectorizationGenerator(
         segmenter_state=segmenter_state,
         d_model=D_MODEL,
         latent_dim=LATENT_DIM,
@@ -234,9 +240,9 @@ def main(
     # Separate parameter groups for different parts of the model
     # The `name` for each group will be used for logging learning rates.
     # The parameters are identified by their object id.
-    lstm_params = list(model.decoder.lstm.parameters())
-    output_command_params = list(model.decoder.output_command.parameters())
-    output_coords_params = list(model.decoder.output_coords.parameters())
+    lstm_params = list(model.decoder_core.lstm.parameters())
+    output_command_params = list(model.decoder_core.output_command.parameters())
+    output_coords_params = list(model.decoder_core.output_coords.parameters())
     special_params_ids = set(
         id(p) for p in lstm_params + output_command_params + output_coords_params
     )
@@ -446,8 +452,15 @@ def main(
                 print(f"Saved best model to {model_name}")
 
             # Callbacks
-            log_bounding_boxes(model, test_loader, val_writer, epoch)
-            log_vectorizer_outputs(model, test_loader, val_writer, epoch)
+            inference_pipeline.vectorizer.load_state_dict(model.state_dict())
+            inference_pipeline.eval()
+            log_vectorizer_outputs(
+                model,
+                inference_pipeline,
+                test_loader,
+                val_writer,
+                epoch,
+            )
             log_confusion_matrix(cm_state, val_writer, epoch)
 
         # Log the learning rate

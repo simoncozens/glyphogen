@@ -4,6 +4,7 @@ import pytest
 from glyphogen.representations.nodecommand import NodeCommand
 from glyphogen.glyph import Glyph
 from glyphogen.nodeglyph import NodeContour
+import uharfbuzz as hb
 
 
 def test_smooth_node_roundtrip():
@@ -64,7 +65,11 @@ def test_we_generate_some():
     if not font_path.exists():
         pytest.skip("NotoSans[wdth,wght].ttf not found, skipping real glyph test.")
     char_to_test = "s"  # Should be some smooth nodes in 's'
-    glyph = Glyph(font_path, ord(char_to_test), {})
+
+    hb_face = hb.Face(hb.Blob.from_file_path(font_path))
+    hb_font = hb.Font(hb_face)
+    gid = hb_font.get_nominal_glyph(ord(char_to_test))
+    glyph = Glyph(font_path, gid, hb_face, {})
     svg_glyph_orig = None
     try:
         svg_glyph_orig = glyph.vectorize()

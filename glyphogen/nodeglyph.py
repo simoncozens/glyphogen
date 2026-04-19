@@ -35,6 +35,7 @@ class Node:
     def index(self) -> int:
         if self._index is None:
             self._contour.index_your_nodes()
+            assert self._index is not None, "Node index should have been set by contour"
         return self._index
 
     @property
@@ -307,7 +308,18 @@ class NodeGlyph:
         Decodes a list of ndarray sequences into a list of NodeCommand sequences.
         This is a stateless conversion from ndarray representation to command objects.
         """
-        command_keys = list(representation_cls.grammar.keys())
+        glyph_commands = cls.decode_raw(contour_sequences, representation_cls)
+        if return_raw_command_lists:
+            return glyph_commands
+
+        return cls.from_command_lists(glyph_commands)
+
+    @classmethod
+    def decode_raw(
+        cls,
+        contour_sequences: List,
+        representation_cls: type["CommandRepresentation"],
+    ) -> List[List["CommandRepresentation"]]:
         glyph_commands: List[List["CommandRepresentation"]] = []
 
         for ndarrays in contour_sequences:
@@ -330,11 +342,7 @@ class NodeGlyph:
                     break
 
             glyph_commands.append(contour_commands)
-
-        if return_raw_command_lists:
-            return glyph_commands
-
-        return cls.from_command_lists(glyph_commands)
+        return glyph_commands
 
     def to_debug_string(self):
         path_data: List[str] = []

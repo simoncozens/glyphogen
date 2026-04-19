@@ -16,6 +16,7 @@ from glyphogen.representations.nodecommand import (
 from glyphogen.hyperparameters import GEN_IMAGE_SIZE
 import numpy as np
 import torch
+import uharfbuzz as hb
 
 
 def test_glyph_extraction():
@@ -24,7 +25,10 @@ def test_glyph_extraction():
     location = {"wght": 400.0}
     codepoint = ord("a")
 
-    glyph = Glyph(font_path, codepoint, location)
+    hb_face = hb.Face(hb.Blob.from_file_path(font_path))
+    hb_font = hb.Font(hb_face)
+    gid = hb_font.get_nominal_glyph(codepoint)
+    glyph = Glyph(font_path, gid, hb_face, {})
 
     # Rasterize the glyph
     rasterized_glyph = glyph.rasterize(GEN_IMAGE_SIZE[0])
@@ -81,7 +85,11 @@ def test_glyph_simplify():
     location = {"wght": 400.0}
     codepoint = ord("A")
 
-    glyph = Glyph(font_path, codepoint, location)
+    hb_face = hb.Face(hb.Blob.from_file_path(font_path))
+    hb_font = hb.Font(hb_face)
+    gid = hb_font.get_nominal_glyph(codepoint)
+    glyph = Glyph(font_path, gid, hb_face, {})
+
     vectorized_glyph = glyph.vectorize(remove_overlaps=False)
     assert len(vectorized_glyph.to_node_glyph().contours) == 3
 

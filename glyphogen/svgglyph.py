@@ -53,7 +53,7 @@ class SVGGlyph:
         path_data: List[str] = []
         for cmd in self.commands:
             path_data.append(cmd.command)
-            path_data.extend(map(lambda x: str(int(x)), cmd.coordinates))
+            path_data.extend(map(lambda x: str(int(x * 10) / 10), cmd.coordinates))
         return " ".join(path_data)
 
     def to_bezpaths(self) -> List[BezPath]:

@@ -1,14 +1,14 @@
-from typing import List, TYPE_CHECKING
+from typing import List, TYPE_CHECKING, Optional
 from glyphogen.nodeglyph import NodeGlyph
 from glyphogen.svgglyph import SVGGlyph
 import torch
 import torch.nn.functional as F
-import sys
 
 from glyphogen.representations.model import MODEL_REPRESENTATION
 from glyphogen.hyperparameters import (
     ALIGNMENT_LOSS_WEIGHT,
     CONTRASTIVE_LOSS_WEIGHT,
+    GEN_IMAGE_SIZE,
     HUBER_DELTA,
     SIGNED_AREA_WEIGHT,
     VECTOR_LOSS_WEIGHT_COMMAND,
@@ -68,13 +68,10 @@ def losses(
     pred_commands_list = outputs.pred_commands
     pred_coords_std_list = outputs.pred_coords_std
     gt_coords_std_list = outputs.gt_coords_std
-    pred_means_list = outputs.pred_means
-    pred_stds_list = outputs.pred_stds
     lstm_outputs_list = outputs.lstm_outputs
 
     # Data from the collated batch
     gt_target_sequences = collated_batch["target_sequences"]
-    contour_boxes = collated_batch["contour_boxes"]
     x_aligned_point_indices = collated_batch["x_aligned_point_indices"]
     y_aligned_point_indices = collated_batch["y_aligned_point_indices"]
 
@@ -105,15 +102,9 @@ def losses(
         pred_command = pred_commands_list[i]
         pred_coords_std = pred_coords_std_list[i]
         gt_coords_std = gt_coords_std_list[i]
-        pred_means = pred_means_list[i]
-        pred_stds = pred_stds_list[i]
-        box = contour_boxes[i]
         lstm_outputs = lstm_outputs_list[i]
 
-        gt_sequence_img_space = gt_target_sequences[i].to(device)
-        gt_sequence_norm = MODEL_REPRESENTATION.image_space_to_mask_space(
-            gt_sequence_img_space, box
-        )
+        gt_sequence_norm = gt_target_sequences[i].to(device)
         gt_commands_norm, _ = MODEL_REPRESENTATION.split_tensor(gt_sequence_norm)
         gt_command_for_loss = gt_commands_norm[1 : pred_command.shape[0] + 1]
 
@@ -143,10 +134,8 @@ def losses(
             device, gt_command_for_loss, gt_coords_std_sliced, pred_coords_std
         )
 
-        # --- De-standardize and Unroll for other losses and metrics ---
-        pred_coords_norm = MODEL_REPRESENTATION.de_standardize(  # type: ignore
-            pred_coords_std, pred_means, pred_stds
-        )
+        # --- Unroll for other losses and metrics ---
+        pred_coords_norm = outputs.pred_coords_norm[i]
         (
             abs_gt_command,
             abs_gt_coords,
@@ -392,6 +381,9 @@ def masked_coordinate_mae_metric(
     This version expects absolute, bbox-normalized coordinates.
     """
     coord_mask = coordinate_width_mask(gt_command_for_loss, abs_gt_coords)
+    # Why 256? It's a heuristic. We're expecting that the average glyph width
+    # is around 512 font units, and since the coordinates are normalized to [0, 1],
+    # multiplying by 256 gives us a more interpretable MAE in terms of font units.
     elementwise_coord_error = torch.abs(abs_pred_coords * 256.0 - abs_gt_coords * 256.0)
     masked_coord_error = elementwise_coord_error * coord_mask
     num_coords_in_metric = coord_mask.sum()
@@ -436,41 +428,53 @@ def align_sequences(
 
 
 def predictions_to_image_space(
-    outputs: ModelResults, gt_contours: List[GroundTruthContour]
+    outputs: ModelResults,
+    gt_contours: List[GroundTruthContour],
+    original_boxes: Optional[torch.Tensor] = None,
 ):
     pred_commands_list = outputs.pred_commands
     pred_coords_norm_list = outputs.pred_coords_norm
-    contour_boxes = outputs.contour_boxes
 
     pred_commands_and_coords_img_space = []
     for i in range(len(pred_commands_list)):
         pred_cmd = pred_commands_list[i].detach().cpu()
         pred_coords_norm = pred_coords_norm_list[i].detach().cpu()
-        box = contour_boxes[i].detach().cpu()
 
+        sos_token = gt_contours[i]["sequence"].cpu()[0:1, :]
         pred_sequence_norm = torch.cat([pred_cmd, pred_coords_norm], dim=-1)
-        sos_token = MODEL_REPRESENTATION.image_space_to_mask_space(
-            gt_contours[i]["sequence"].cpu(), box
-        )[0:1, :]
         full_pred_sequence_norm = torch.cat([sos_token, pred_sequence_norm], dim=0)
-        pred_sequence_img_space = MODEL_REPRESENTATION.mask_space_to_image_space(
-            full_pred_sequence_norm, box
-        )
-        pred_commands_and_coords_img_space.append(pred_sequence_img_space[1:])
+
+        # Denormalize predicted sequence back to image space if original box is provided
+        if original_boxes is not None:
+            box = original_boxes[i].to(
+                device=full_pred_sequence_norm.device,
+                dtype=full_pred_sequence_norm.dtype,
+            )
+            full_pred_sequence_img = MODEL_REPRESENTATION.mask_space_to_image_space(
+                full_pred_sequence_norm, box
+            )
+            pred_commands_and_coords_img_space.append(full_pred_sequence_img[1:])
+        else:
+            pred_commands_and_coords_img_space.append(full_pred_sequence_norm[1:])
     return pred_commands_and_coords_img_space
 
 
 def dump_debug_sequences(
-    writer, global_step, batch_idx, gt_contours, outputs: ModelResults, loss_values
+    writer,
+    global_step,
+    batch_idx,
+    gt_contours,
+    outputs: ModelResults,
+    loss_values,
+    original_boxes: Optional[torch.Tensor] = None,
 ):
     """For debugging, dump ground truth and predicted sequences"""
     pred_commands_and_coords_img_space = predictions_to_image_space(
-        outputs, gt_contours
+        outputs, gt_contours, original_boxes
     )
-    pred_command_lists = NodeGlyph.decode(
+    pred_command_lists = NodeGlyph.decode_raw(
         pred_commands_and_coords_img_space,
         MODEL_REPRESENTATION,
-        return_raw_command_lists=True,
     )
     pred_glyph = NodeGlyph.from_command_lists(pred_command_lists)
     pred_debug_command_lists = [
@@ -480,10 +484,9 @@ def dump_debug_sequences(
     pred_nodes = ", ".join(pred_debug_command_lists)
 
     debug_string = SVGGlyph.from_node_glyph(pred_glyph).to_svg_string()
-    gt_command_lists = NodeGlyph.decode(
+    gt_command_lists = NodeGlyph.decode_raw(
         [x["sequence"].cpu() for x in gt_contours],
         MODEL_REPRESENTATION,
-        return_raw_command_lists=True,
     )
     gt_debug_command_lists = [
         " ".join([cmd.debug_string() for cmd in cmd_list])
