@@ -52,7 +52,6 @@ def supervised_contrastive_loss(embeddings, labels, temperature=0.07):
     return loss.mean()
 
 
-@torch.compile
 def losses(
     collated_batch: CollatedGlyphData,
     outputs: ModelResults,

@@ -25,7 +25,6 @@ from glyphogen.nodeglyph import NodeGlyph
 import uharfbuzz as hb
 
 LIMIT = 300_000
-NORMALIZED_MASK_SIZE = 512
 
 
 def get_alignments(node_glyph: "NodeGlyph") -> List[Dict]:
@@ -169,7 +168,7 @@ def process_glyph_data(
 
             contour_sequences = node_glyph.encode(MODEL_REPRESENTATION)
             if contour_sequences is None:
-                #print(f"  Skipping glyph {glyph} due to encoding failure.")
+                # print(f"  Skipping glyph {glyph} due to encoding failure.")
                 continue
 
             # Now get segmentation data, which should be in the same order
@@ -180,7 +179,7 @@ def process_glyph_data(
                 contour_sequences
             ):
                 # Mismatch between number of contours in segmentation and vectorization
-                #print("  Skipping glyph due to segmentation/vectorization mismatch.")
+                # print("  Skipping glyph due to segmentation/vectorization mismatch.")
                 continue
 
             img_filename = f"{pth.stem}/{glyph_name}.png"
@@ -306,7 +305,7 @@ def process_glyph_data(
 
         except Exception as e:
             pass
-            #print(f"Could not process from {font_path}: {e}")
+            # print(f"Could not process from {font_path}: {e}")
 
     db_conn.commit()
     return img_id, ann_id

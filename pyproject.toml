@@ -23,6 +23,10 @@ dependencies = [
     "torchvision",
     "jaxtyping",
     "pycocotools",
+    "kurbopy",
+    "svgpathtools", # For pydiffvg
+    "cssutils", # For pydiffvg
+    "matplotlib", # for pydiffvg
 ]
 # Also pydiffvg but that's not on pypi!
 
